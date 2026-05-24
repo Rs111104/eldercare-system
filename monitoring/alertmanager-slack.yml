@@ -1,0 +1,9 @@
+route:
+  receiver: 'slack'
+
+receivers:
+  - name: 'slack'
+    slack_configs:
+      - api_url: 'https://hooks.slack.com/services/REPLACE/THIS/WITH/YOUR/WEBHOOK'
+        channel: '#alerts'
+        text: "[{{ .Status | toUpper }}] {{ .CommonAnnotations.summary }}\n{{ range .Alerts }}\n*{{ .Labels.alertname }}* - {{ .Annotations.description }}\n{{ end }}"

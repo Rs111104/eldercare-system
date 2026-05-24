@@ -1,0 +1,16 @@
+# Include this snippet into your production compose to run the automation service.
+# Example usage: place in your compose directory and `docker compose -f docker-compose.prod.yml -f monitoring/automation/docker-compose.snippet.yml up -d`
+
+services:
+  automation:
+    build:
+      context: ./monitoring/automation/service
+      dockerfile: Dockerfile
+    image: eldercare/automation:latest
+    environment:
+      - ALERT_SLACK_WEBHOOK=${ALERT_SLACK_WEBHOOK}
+      - PAGERDUTY_INTEGRATION_KEY=${PAGERDUTY_INTEGRATION_KEY}
+      - AUTOMATION_DEDUPE_TTL=300
+    ports:
+      - "5000:5000"
+    restart: unless-stopped

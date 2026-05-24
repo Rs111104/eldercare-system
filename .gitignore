@@ -1,0 +1,16 @@
+.env
+.env.local
+.env.development
+.env.production
+.env.test
+__pycache__/
+*.pyc
+node_modules/
+venv/
+dist/
+backups/
+deployments/
+.env.*
+!.env.example
+!**/.env.example
+.secrets

@@ -128,7 +128,7 @@ app.include_router(tracking_router, prefix=f"{api_prefix}/tracking", tags=["trac
 app.include_router(payouts_router, prefix=f"{api_prefix}/payouts", tags=["payouts"], dependencies=[Depends(get_current_user)])
 app.include_router(safety_router, prefix=f"{api_prefix}/safety", tags=["safety"], dependencies=[Depends(get_current_user)])
 app.include_router(health_router, prefix=f"{api_prefix}", tags=["health"])
-app.include_router(realtime_router, prefix=f"{api_prefix}", tags=["realtime"])
+app.include_router(realtime_router, prefix=f"{api_prefix}", tags=["realtime"], dependencies=[Depends(get_current_user)])
 
 
 @app.get("/")

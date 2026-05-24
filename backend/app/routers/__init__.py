@@ -1,0 +1,11 @@
+from app.routers.auth import router as auth_router
+from app.routers.tasks import router as tasks_router
+from app.routers.workers import router as workers_router
+from app.routers.customers import router as customers_router
+from app.routers.pricing import router as pricing_router
+from app.routers.whatsapp import router as whatsapp_router
+from app.routers.tracking import router as tracking_router
+from app.routers.payouts import router as payouts_router
+from app.routers.onboarding import router as onboarding_router
+from app.routers.admin import router as admin_router
+from app.routers.safety import router as safety_router

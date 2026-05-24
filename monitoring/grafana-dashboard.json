@@ -1,0 +1,76 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": "Prometheus",
+        "enable": true,
+        "hide": true,
+        "iconColor": "#f93f17",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "graph",
+      "title": "HTTP Requests (rate)",
+      "targets": [
+        {
+          "expr": "sum(rate(http_requests_total[5m])) by (endpoint)",
+          "format": "time_series"
+        }
+      ],
+      "datasource": "Prometheus"
+    },
+    {
+      "type": "graph",
+      "title": "HTTP Latency (p95)",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(http_request_latency_seconds_bucket[5m])) by (le, endpoint))",
+          "format": "time_series"
+        }
+      ],
+      "datasource": "Prometheus"
+    }
+    ,
+    {
+      "type": "graph",
+      "title": "Cache Hits (rate)",
+      "targets": [
+        {
+          "expr": "sum(rate(cache_hits_total[5m])) by (key_prefix)",
+          "format": "time_series"
+        }
+      ],
+      "datasource": "Prometheus"
+    },
+    {
+      "type": "graph",
+      "title": "Cache Misses (rate)",
+      "targets": [
+        {
+          "expr": "sum(rate(cache_misses_total[5m])) by (key_prefix)",
+          "format": "time_series"
+        }
+      ],
+      "datasource": "Prometheus"
+    },
+    {
+      "type": "stat",
+      "title": "Cache Invalidations Total",
+      "targets": [
+        {
+          "expr": "sum(cache_invalidations_total)",
+          "format": "time_series"
+        }
+      ],
+      "datasource": "Prometheus"
+    }
+  ],
+  "schemaVersion": 27,
+  "title": "ElderCare - Basic HTTP Metrics",
+  "version": 1
+}
