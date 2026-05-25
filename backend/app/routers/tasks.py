@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile, Depends
 
 from app.models import TaskCreateRequest, TaskStatus, TaskUpdateRequest
 from app.store import store
+from app.core.deps import require_role
 from app.core.cache import cache_response, invalidate_task_cache
 from app.core.utils import sanitize_text
 
@@ -11,20 +12,18 @@ router = APIRouter()
 
 
 @router.post("/create")
-async def create_task(payload: TaskCreateRequest):
-    customer_id = payload.customer_id or (next(iter(store.customers.keys()), None) or "guest-customer")
+async def create_task(payload: TaskCreateRequest, _user=Depends(require_role("customer"))):
+    # customer_id is required and must refer to an existing customer owned by the authenticated user
+    customer_id = payload.customer_id or getattr(_user, "user_id", None)
+    if not customer_id:
+        raise HTTPException(status_code=400, detail="customer_id is required")
+
     customer = store.get_customer(customer_id)
     if not customer:
-        store.customers[customer_id] = {
-            "id": customer_id,
-            "phone": customer_id,
-            "name": "Customer",
-            "address": "",
-            "lat": payload.location_lat,
-            "lng": payload.location_lng,
-            "created_at": store._now(),
-        }
-        customer = store.get_customer(customer_id)
+        raise HTTPException(status_code=404, detail="Customer not found")
+    # ensure authenticated user owns the customer_id
+    if getattr(_user, "user_id", None) != customer_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
 
     service_type = payload.service_type or payload.task_type or "other"
     urgency = payload.urgency or (1.0 + (((payload.urgency_level or 1) - 1) * 0.125))

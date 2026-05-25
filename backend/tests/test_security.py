@@ -14,9 +14,11 @@ def test_sanitize_text():
 def test_whatsapp_signature_verification():
     svc = WhatsAppService()
     body = b'{"hello":"world"}'
-    # when no secret set, verification should pass
+    # when no secret set, verification should raise configuration error (secret required)
     settings.WHATSAPP_APP_SECRET = ""
-    assert svc.verify_webhook_signature("", body) is True
+    import pytest
+    with pytest.raises(RuntimeError):
+        svc.verify_webhook_signature("", body)
 
     # when secret set, compute signature and verify
     settings.WHATSAPP_APP_SECRET = "test-secret"

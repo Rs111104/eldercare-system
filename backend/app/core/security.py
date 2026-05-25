@@ -2,12 +2,10 @@
 Security utilities for token and password management
 """
 from datetime import datetime, timedelta, timezone
-from hashlib import sha256
-from hmac import compare_digest, new as hmac_new
 from typing import Optional
-from urllib.parse import quote, unquote
 
 from pydantic import BaseModel
+from jose import jwt, JWTError
 
 from app.config import settings
 try:
@@ -17,8 +15,8 @@ except Exception:
     _HAS_PASSLIB = False
 
 from datetime import timedelta
-import json
 from uuid import uuid4
+
 
 class TokenData(BaseModel):
     user_id: str
@@ -26,16 +24,16 @@ class TokenData(BaseModel):
     user_type: str  # "customer", "worker", "admin"
     exp: datetime
 
+
 def create_access_token(
     user_id: str,
     phone_number: str,
     user_type: str,
-    expires_delta: Optional[timedelta] = None
+    expires_delta: Optional[timedelta] = None,
 ) -> str:
-    """Create JWT token"""
+    """Create JWT token using python-jose HS256."""
     if expires_delta is None:
         expires_delta = timedelta(hours=settings.JWT_EXPIRATION_HOURS)
-    
     expire = datetime.now(timezone.utc) + expires_delta
     payload = {
         "user_id": user_id,
@@ -43,41 +41,31 @@ def create_access_token(
         "user_type": user_type,
         "exp": int(expire.timestamp()),
     }
-
-    import json
-    payload_json = json.dumps(payload, separators=(",", ":"), sort_keys=True)
-    signature = hmac_new(settings.JWT_SECRET.encode("utf-8"), payload_json.encode("utf-8"), sha256).hexdigest()
-    return f"{quote(payload_json)}.{signature}"
+    token = jwt.encode(payload, settings.JWT_SECRET, algorithm=getattr(settings, "ALGORITHM", "HS256"))
+    return token
 
 
-def create_refresh_token(user_id: str) -> str:
-    # simple opaque token; server will track rotation
-    return str(uuid4())
+def create_refresh_token(user_id: str, role: str) -> str:
+    # keep simple uuid:role format for refresh tokens
+    return f"{uuid4()}:{role}"
+
 
 def verify_token(token: str) -> Optional[TokenData]:
-    """Verify and decode JWT token"""
+    """Verify and decode JWT token using python-jose."""
     try:
-        import json
-
-        encoded_payload, signature = token.rsplit(".", 1)
-        payload_json = unquote(encoded_payload)
-        expected = hmac_new(settings.JWT_SECRET.encode("utf-8"), payload_json.encode("utf-8"), sha256).hexdigest()
-        if not compare_digest(signature, expected):
+        payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[getattr(settings, "ALGORITHM", "HS256")])
+        exp = payload.get("exp")
+        if not exp or int(exp) < int(datetime.now(timezone.utc).timestamp()):
             return None
-
-        payload = json.loads(payload_json)
-        if int(payload.get("exp", 0)) < int(datetime.now(timezone.utc).timestamp()):
-            return None
-
         user_id = payload.get("user_id")
         phone_number = payload.get("phone_number")
         user_type = payload.get("user_type")
         if user_id is None or phone_number is None:
             return None
-
-        return TokenData(user_id=user_id, phone_number=phone_number, user_type=user_type, exp=datetime.fromtimestamp(payload.get("exp"), tz=timezone.utc))
-    except Exception:
+        return TokenData(user_id=user_id, phone_number=phone_number, user_type=user_type, exp=datetime.fromtimestamp(int(exp), tz=timezone.utc))
+    except JWTError:
         return None
+
 
 def hash_password(password: str) -> str:
     """Hash password using bcrypt via passlib when available, otherwise fallback to salted sha256."""
@@ -85,8 +73,10 @@ def hash_password(password: str) -> str:
         pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
         return pwd_context.hash(password)
     # fallback
+    from hashlib import sha256
     salt = settings.JWT_SECRET[:16]
     return sha256(f"{salt}:{password}".encode("utf-8")).hexdigest()
+
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verify password against the stored digest using passlib when available, otherwise fallback."""
@@ -97,4 +87,5 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
         except Exception:
             return False
     # fallback
+    from hmac import compare_digest
     return compare_digest(hash_password(plain_password), hashed_password)

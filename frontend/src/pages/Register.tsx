@@ -69,8 +69,8 @@ export default function Register() {
           <p className="mt-2 text-sm leading-6 text-slate-600">Choose the role you need and we’ll wire your dashboard to the right workflow.</p>
         </div>
 
-        <div className="grid grid-cols-3 gap-2 rounded-2xl bg-slate-100 p-2">
-          {(['customer', 'worker', 'admin'] as Role[]).map((value) => (
+        <div className="grid grid-cols-2 gap-2 rounded-2xl bg-slate-100 p-2">
+          {(['customer', 'worker'] as Role[]).map((value) => (
             <button key={value} type="button" onClick={() => setRole(value)} className={["rounded-2xl px-3 py-2 text-sm font-semibold capitalize transition", role === value ? 'bg-white text-slate-950 shadow-sm' : 'text-slate-500 hover:text-slate-900'].join(' ')}>
               {value}
             </button>

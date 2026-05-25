@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     RATE_LIMIT_LOGIN_MAX: int = 5
     RATE_LIMIT_LOGIN_WINDOW_MINUTES: int = 10
     RATE_LIMIT_LOCK_MINUTES: int = 30
+    ALLOW_ADMIN_BOOTSTRAP: bool = False
+    ADMIN_BOOTSTRAP_TOKEN: str | None = None
 
     SUPABASE_URL: str = ""
     SUPABASE_KEY: str = ""

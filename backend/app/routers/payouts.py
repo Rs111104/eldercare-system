@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from app.store import store
+from app.core.deps import require_role
 
 router = APIRouter()
 
@@ -39,7 +40,7 @@ async def process_task_payout(task_id: str):
 
 
 @router.post("/{payout_id}/release-immediate")
-async def release_immediate_payout(payout_id: str):
+async def release_immediate_payout(payout_id: str, _admin=Depends(require_role("admin"))):
     payout = store.payouts.get(payout_id)
     if not payout:
         raise HTTPException(status_code=404, detail="Payout not found")

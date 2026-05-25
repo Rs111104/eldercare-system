@@ -32,7 +32,12 @@ async def handle_whatsapp_webhook(request: Request):
     body = await request.body()
     signature = request.headers.get("X-Hub-Signature-256", "")
     ws = WhatsAppService()
-    if not ws.verify_webhook_signature(signature, body):
+    try:
+        valid = ws.verify_webhook_signature(signature, body)
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    if not valid:
         raise HTTPException(status_code=403, detail="Invalid signature")
 
     try:

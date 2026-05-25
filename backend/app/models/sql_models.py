@@ -64,6 +64,7 @@ class RefreshToken(Base):
     token = Column(String, primary_key=True)
     user_id = Column(String, index=True)
     expires_at = Column(String)
+    role = Column(String, nullable=True)
 
 
 class Payout(Base):

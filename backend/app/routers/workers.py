@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from app.models import TaskStatus, WorkerLocationRequest
 from app.store import store
 from app.core.cache import cache_response, invalidate_worker_cache, invalidate_task_cache
 from app.core.redis_client import get_redis
-from math import radians, sin, cos, sqrt, atan2
+from app.core.deps import require_role
+from app.utils.geo import haversine
 import time
 import json
 
@@ -36,7 +37,9 @@ async def get_worker(worker_id: str):
 
 
 @router.put("/{worker_id}/location")
-async def update_worker_location(worker_id: str, payload: WorkerLocationRequest):
+async def update_worker_location(worker_id: str, payload: WorkerLocationRequest, _user=Depends(require_role("worker"))):
+    if getattr(_user, "user_id", None) != worker_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
     worker = store.workers.get(worker_id)
     if not worker:
         raise HTTPException(status_code=404, detail="Worker not found")
@@ -48,16 +51,8 @@ async def update_worker_location(worker_id: str, payload: WorkerLocationRequest)
     try:
         moved = True
         if prev_lat is not None and prev_lng is not None:
-            # haversine
-            def _haversine(lat1, lon1, lat2, lon2):
-                R = 6371000.0
-                dlat = radians(lat2 - lat1)
-                dlon = radians(lon2 - lon1)
-                a = sin(dlat / 2) ** 2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon / 2) ** 2
-                c = 2 * atan2(sqrt(a), sqrt(1 - a))
-                return R * c
-
-            dist_m = _haversine(prev_lat, prev_lng, payload.lat, payload.lng)
+            # haversine returns km; convert to meters for >50m check
+            dist_m = haversine(prev_lat, prev_lng, payload.lat, payload.lng) * 1000.0
             moved = dist_m >= 50.0
 
         if moved:
@@ -99,12 +94,13 @@ async def get_available_tasks(worker_id: str, service_type: str | None = None):
 
 
 @router.post("/{worker_id}/accept-task/{task_id}")
-async def accept_task(worker_id: str, task_id: str):
+async def accept_task(worker_id: str, task_id: str, _user=Depends(require_role("worker"))):
+    if getattr(_user, "user_id", None) != worker_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
     if not store.get_worker(worker_id):
         raise HTTPException(status_code=404, detail="Worker not found")
     try:
-        store.assign_worker(task_id, worker_id)
-        task = store.update_task(task_id, status=TaskStatus.accepted.value)
+        task = store.update_task(task_id, worker_id=worker_id, status=TaskStatus.assigned.value)
         try:
             invalidate_task_cache(task_id)
             invalidate_worker_cache(worker_id)
@@ -116,7 +112,9 @@ async def accept_task(worker_id: str, task_id: str):
 
 
 @router.post("/{worker_id}/reject-task/{task_id}")
-async def reject_task(worker_id: str, task_id: str):
+async def reject_task(worker_id: str, task_id: str, _user=Depends(require_role("worker"))):
+    if getattr(_user, "user_id", None) != worker_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
     if not store.get_worker(worker_id):
         raise HTTPException(status_code=404, detail="Worker not found")
     task = store.tasks.get(task_id)
@@ -126,7 +124,9 @@ async def reject_task(worker_id: str, task_id: str):
 
 
 @router.post("/{worker_id}/check-in/{task_id}")
-async def check_in(worker_id: str, task_id: str, payload: dict | None = None):
+async def check_in(worker_id: str, task_id: str, payload: dict | None = None, _user=Depends(require_role("worker"))):
+    if getattr(_user, "user_id", None) != worker_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
     payload = payload or {}
     lat = float(payload.get("latitude", payload.get("lat", 0.0)))
     lng = float(payload.get("longitude", payload.get("lng", 0.0)))
@@ -136,7 +136,9 @@ async def check_in(worker_id: str, task_id: str, payload: dict | None = None):
 
 
 @router.post("/{worker_id}/check-out/{task_id}")
-async def check_out(worker_id: str, task_id: str, payload: dict | None = None):
+async def check_out(worker_id: str, task_id: str, payload: dict | None = None, _user=Depends(require_role("worker"))):
+    if getattr(_user, "user_id", None) != worker_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
     payload = payload or {}
     lat = float(payload.get("latitude", payload.get("lat", 0.0)))
     lng = float(payload.get("longitude", payload.get("lng", 0.0)))

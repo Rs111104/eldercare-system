@@ -4,6 +4,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi import HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import logging
+from contextlib import asynccontextmanager
 from datetime import datetime
 
 from app.core.deps import get_current_user
@@ -32,16 +33,44 @@ from app.routers import (
 )
 from app.routers.health import router as health_router
 from app.routers.realtime import router as realtime_router
-from app.store import store
+from app.store import store, seed_default_pricing
 from app.routers.whatsapp import reprocess_stored_whatsapp_messages
 from app.services.queue_worker import start_queue_worker, stop_queue_worker
 from app.middleware.request_logging import RequestLoggingMiddleware
 from app.core import metrics
 
 
-app = FastAPI(title=settings.APP_NAME, version=settings.APP_VERSION, debug=settings.DEBUG)
-
 logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    seed_default_pricing(store)
+    try:
+        store.process_pending_payout_retries()
+    except Exception:
+        logger.exception("Error processing pending payout retries")
+
+    try:
+        await reprocess_stored_whatsapp_messages()
+    except Exception:
+        logger.exception("Error reprocessing stored whatsapp messages on startup")
+
+    try:
+        await start_queue_worker(app)
+    except Exception:
+        logger.exception("Failed to start queue worker")
+
+    try:
+        yield
+    finally:
+        try:
+            await stop_queue_worker(app)
+        except Exception:
+            logger.exception("Error stopping queue worker")
+
+
+app = FastAPI(title=settings.APP_NAME, version=settings.APP_VERSION, debug=settings.DEBUG, lifespan=lifespan)
 
 
 @app.exception_handler(Exception)
@@ -94,27 +123,6 @@ app.add_middleware(
 app.add_middleware(RequestLoggingMiddleware)
 
 
-@app.on_event("startup")
-async def startup_event() -> None:
-    store.reset()
-    # Process any pending payout retries and reprocess stored whatsapp messages
-    try:
-        store.process_pending_payout_retries()
-    except Exception:
-        logger.exception("Error processing pending payout retries")
-
-    try:
-        await reprocess_stored_whatsapp_messages()
-    except Exception:
-        logger.exception("Error reprocessing stored whatsapp messages on startup")
-
-    # start background queue worker for WhatsApp/payouts
-    try:
-        await start_queue_worker(app)
-    except Exception:
-        logger.exception("Failed to start queue worker")
-
-
 api_prefix = settings.API_V1_STR
 app.include_router(auth_router, prefix=f"{api_prefix}/auth", tags=["auth"])
 app.include_router(tasks_router, prefix=f"{api_prefix}/tasks", tags=["tasks"], dependencies=[Depends(get_current_user)])
@@ -139,14 +147,6 @@ async def root():
 @app.get("/health")
 async def health_check():
     return {"status": "healthy"}
-
-
-@app.on_event("shutdown")
-async def shutdown_event() -> None:
-    try:
-        await stop_queue_worker(app)
-    except Exception:
-        logger.exception("Error stopping queue worker")
 
 
 if __name__ == "__main__":

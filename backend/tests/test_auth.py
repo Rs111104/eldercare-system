@@ -1,7 +1,8 @@
 """
 Authentication endpoint tests
 """
-import pytest
+
+from app.core.config import settings
 
 
 def test_customer_registration(client):
@@ -72,3 +73,53 @@ def test_invalid_login(client):
     )
     
     assert response.status_code == 401
+
+
+def test_admin_registration_requires_bootstrap_token_when_no_admins(client, monkeypatch):
+    monkeypatch.setattr(settings, "ADMIN_BOOTSTRAP_TOKEN", "bootstrap-secret")
+
+    response = client.post(
+        "/api/v1/auth/register/admin",
+        json={
+            "phone_number": "+910000000001",
+            "password": "AdminPassword123!",
+        },
+        headers={"X-Bootstrap-Token": "bootstrap-secret"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["user_type"] == "admin"
+
+
+def test_admin_registration_requires_admin_after_bootstrap(client, monkeypatch):
+    monkeypatch.setattr(settings, "ADMIN_BOOTSTRAP_TOKEN", "bootstrap-secret")
+
+    bootstrap_response = client.post(
+        "/api/v1/auth/register/admin",
+        json={
+            "phone_number": "+910000000002",
+            "password": "AdminPassword123!",
+        },
+        headers={"X-Bootstrap-Token": "bootstrap-secret"},
+    )
+    assert bootstrap_response.status_code == 200
+    admin_token = bootstrap_response.json()["access_token"]
+
+    forbidden_response = client.post(
+        "/api/v1/auth/register/admin",
+        json={
+            "phone_number": "+910000000003",
+            "password": "AdminPassword123!",
+        },
+    )
+    assert forbidden_response.status_code == 403
+
+    allowed_response = client.post(
+        "/api/v1/auth/register/admin",
+        json={
+            "phone_number": "+910000000004",
+            "password": "AdminPassword123!",
+        },
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert allowed_response.status_code == 200

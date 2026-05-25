@@ -27,13 +27,14 @@ def cache_response(ttl: int = 30):
 
     def decorator(func: Callable):
         @functools.wraps(func)
-        async def wrapper(*args, **kwargs):
-            # find Request in args/kwargs
-            request = None
-            for a in args:
-                if isinstance(a, Request):
-                    request = a
-                    break
+        async def wrapper(*args, request: Request | None = None, **kwargs):
+            # FastAPI will inject Request into this wrapper when available.
+            # fallback: find Request in args/kwargs if not injected
+            if request is None:
+                for a in args:
+                    if isinstance(a, Request):
+                        request = a
+                        break
             if request is None:
                 request = kwargs.get('request')
 
@@ -53,6 +54,9 @@ def cache_response(ttl: int = 30):
                 except Exception as e:
                     logger.debug('Cache read failed: %s', e)
 
+            # ensure wrapped func receives the request object as a parameter
+            if 'request' not in kwargs and request is not None:
+                kwargs['request'] = request
             result = await func(*args, **kwargs)
 
             if redis and key:

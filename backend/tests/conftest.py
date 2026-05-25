@@ -54,7 +54,6 @@ def sample_task():
         "mode": "quick",
         "urgency_level": 3,
         "location": "123 Main St, City, State 12345",
-        "customer_id": "test-customer-123"
     }
 
 

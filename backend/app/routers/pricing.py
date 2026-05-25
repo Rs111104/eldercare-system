@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from app.models import PricingConfigRequest, PricingRequest
+from app.core.deps import require_role
 from app.store import store
 
 router = APIRouter()
@@ -59,6 +60,6 @@ async def get_pricing_config(service_type: str):
     return config
 
 
-@router.post("/config")
-async def update_pricing_config(payload: PricingConfigRequest):
+@router.put("/config")
+async def update_pricing_config(payload: PricingConfigRequest, _admin=Depends(require_role("admin"))):
     return store.upsert_pricing_config(payload.service_type, payload.base_price, payload.per_km_rate, payload.floor_price, payload.ceiling_price)

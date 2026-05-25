@@ -41,7 +41,46 @@ class DBStore:
         session = self.Session()
         task_id = str(uuid4())
         urgency_multiplier = max(1.0, min(float(urgency), 1.5))
-        price = round((base_price + (distance_km * 5.0)) * urgency_multiplier, 2)
+
+        # Attempt to replicate InMemoryStore pricing breakdown logic using DB data
+        # Get pricing config if available
+        cfg = session.query(PricingConfig).filter(PricingConfig.service_type == service_type).first()
+        if cfg:
+            cfg_base = float(getattr(cfg, "base_price", 100.0))
+            cfg_per_km = float(getattr(cfg, "per_km_rate", 5.0))
+        else:
+            cfg_base = float(base_price or 100.0)
+            cfg_per_km = 5.0
+
+        # Active tasks and verified workers approximations
+        active_tasks = session.query(Task).filter(Task.status.in_("created", "assigned", "accepted", "in_progress")).count()
+        # Count verified, unfrozen workers similar to InMemoryStore logic
+        worker_rows = session.query(User).filter(User.user_type == "worker").all()
+        verified_workers = len([w for w in worker_rows if (getattr(w, "extra", {}) or {}).get("is_verified") and not (getattr(w, "extra", {}) or {}).get("is_frozen")]) or 1
+        busy_ratio = float(active_tasks) / max(1, verified_workers)
+        surge_multiplier = 1.2 if busy_ratio >= 0.8 else 1.0
+
+        now = datetime.utcnow()
+        evening_weekend = now.weekday() >= 5 or 18 <= now.hour < 22
+        time_multiplier = 1.1 if evening_weekend else 1.0
+
+        loyalty_multiplier = 1.0
+        loyalty_task_count = session.query(Task).filter(Task.customer_id == customer_id).count() if customer_id else 0
+        if loyalty_task_count >= 25:
+            loyalty_multiplier = 0.85
+        elif loyalty_task_count >= 10:
+            loyalty_multiplier = 0.90
+
+        same_day_multiplier = 1.0
+
+        raw_total = (cfg_base + (float(distance_km) * cfg_per_km)) * urgency_multiplier
+        total = raw_total * surge_multiplier * time_multiplier * loyalty_multiplier * same_day_multiplier
+        # floor/ceiling (use DB config if present, else reasonable defaults)
+        floor_price = float(getattr(cfg, "floor_price", None) or max(0.0, cfg_base * 0.75))
+        ceiling_price = float(getattr(cfg, "ceiling_price", None) or (cfg_base * 4.0))
+        total = min(max(total, floor_price), ceiling_price)
+        price = round(total, 2)
+
         t = Task(id=task_id, title=title, customer_id=customer_id, worker_id=worker_id, service_type=service_type, status=status, description=description, price=price, urgency=urgency_multiplier)
         session.add(t)
         session.commit()
@@ -290,6 +329,15 @@ class DBStore:
         session.close()
         return {k: v for k, v in u.__dict__.items() if k != "_sa_instance_state" and k != "password_hash"}
 
+    def has_admins(self) -> bool:
+        session = self.Session()
+        exists = session.query(User.id).filter(User.user_type == "admin").first() is not None
+        session.close()
+        return exists
+
+    def has_any_admin(self) -> bool:
+        return self.has_admins()
+
     def create_worker(self, phone: str, name: str, service_type: str, rating: float = 4.8, is_verified: bool = False, current_lat: Optional[float] = None, current_lng: Optional[float] = None, password: str = "") -> Dict[str, Any]:
         session = self.Session()
         user_id = str(uuid4())
@@ -312,9 +360,9 @@ class DBStore:
             return {"role": u.user_type, "record": record}
         return None
 
-    def store_refresh_token(self, token: str, user_id: str, expires_at: str) -> None:
+    def store_refresh_token(self, token: str, user_id: str, expires_at: str, role: Optional[str] = None) -> None:
         session = self.Session()
-        rt = RefreshToken(token=token, user_id=user_id, expires_at=expires_at)
+        rt = RefreshToken(token=token, user_id=user_id, expires_at=expires_at, role=role)
         session.add(rt)
         session.commit()
         session.close()
@@ -331,7 +379,7 @@ class DBStore:
         session.close()
         if not rt:
             return None
-        return {"user_id": rt.user_id, "expires_at": rt.expires_at}
+        return {"user_id": rt.user_id, "expires_at": rt.expires_at, "role": getattr(rt, "role", None)}
 
     def record_login_attempt(self, phone: str, max_attempts: int = 5, window_minutes: int = 10, lock_minutes: int = 30) -> None:
         # For DB-backed store we'd still prefer Redis for rate limiting; raise to fallback logic

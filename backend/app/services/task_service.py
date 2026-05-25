@@ -7,6 +7,7 @@ from app.schemas import TaskCreate, TaskStatus, PricingFactors
 from supabase import Client
 from typing import List, Optional, Dict, Any
 import json
+from app.utils.geo import haversine
 
 class TaskService:
     def __init__(self, db: Client):
@@ -109,7 +110,7 @@ class TaskService:
                 continue
             
             # Calculate distance
-            distance = self._haversine_distance(
+            distance = haversine(
                 location_lat, location_lng,
                 worker.get("location_lat"), worker.get("location_lng")
             )
@@ -132,20 +133,7 @@ class TaskService:
         
         return matched_workers
 
-    @staticmethod
-    def _haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-        """Calculate distance between two coordinates in km"""
-        from math import radians, cos, sin, asin, sqrt
-        
-        lon1, lat1, lon2, lat2 = map(radians, [lon1, lat1, lon2, lat2])
-        
-        dlon = lon2 - lon1
-        dlat = lat2 - lat1
-        a = sin(dlat / 2) ** 2 + cos(lat1) * cos(lat2) * sin(dlon / 2) ** 2
-        c = 2 * asin(sqrt(a))
-        km = 6371 * c
-        
-        return round(km, 2)
+    # uses shared haversine utility
 
     async def assign_worker_to_task(
         self,

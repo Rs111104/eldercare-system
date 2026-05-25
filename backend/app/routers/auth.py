@@ -1,22 +1,54 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Security, status
+from fastapi.security import HTTPAuthorizationCredentials
 from datetime import datetime, timedelta, timezone
 
 from app.models import AuthRegisterRequest, LoginRequest, TokenResponse
 from app.store import store
 from app.core.security import create_access_token, create_refresh_token
 from app.core.config import settings
+from app.core.deps import get_current_user
 from app.core.utils import sanitize_text
+from app.core.deps import security
 
 router = APIRouter()
 
 
+def _has_admins() -> bool:
+    checker = getattr(store, "has_any_admin", None)
+    if callable(checker):
+        return bool(checker())
+    checker = getattr(store, "has_admins", None)
+    if callable(checker):
+        return bool(checker())
+    admins = getattr(store, "admins", None)
+    return bool(admins)
+
+
+def _verify_bootstrap_token(bootstrap_token: str | None) -> None:
+    if settings.ADMIN_BOOTSTRAP_TOKEN is None:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Admin bootstrap token is not configured")
+    if not bootstrap_token or bootstrap_token != settings.ADMIN_BOOTSTRAP_TOKEN:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+
+def _require_admin_access(credentials: HTTPAuthorizationCredentials | None) -> None:
+    if not credentials:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+    try:
+        user = get_current_user(credentials)
+    except HTTPException:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+    if getattr(user, "user_type", None) != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+
 def _issue_response(user_type: str, user: dict) -> dict:
     access = create_access_token(user_id=user["id"], phone_number=user["phone"], user_type=user_type)
-    refresh = create_refresh_token(user_id=user["id"])
+    refresh = create_refresh_token(user_id=user["id"], role=user_type)
     expires_at = (datetime.now(timezone.utc) + timedelta(days=settings.REFRESH_TOKEN_EXPIRATION_DAYS)).isoformat()
-    store.store_refresh_token(refresh, user_id=user["id"], expires_at=expires_at)
+    store.store_refresh_token(refresh, user_id=user["id"], expires_at=expires_at, role=user_type)
     return TokenResponse(
         access_token=access,
         refresh_token=refresh,
@@ -56,8 +88,17 @@ async def register_worker(payload: AuthRegisterRequest):
 
 
 @router.post("/register/admin")
-async def register_admin(payload: AuthRegisterRequest):
+async def register_admin(
+    payload: AuthRegisterRequest,
+    bootstrap_token: str | None = Header(default=None, alias="X-Bootstrap-Token"),
+    credentials: HTTPAuthorizationCredentials | None = Security(security),
+):
     """Register a new admin (separate from customers)"""
+    if _has_admins():
+        _require_admin_access(credentials)
+    else:
+        _verify_bootstrap_token(bootstrap_token)
+
     user = store.create_admin(
         phone=sanitize_text(payload.phone),
         name=sanitize_text(payload.name) or "Admin",
@@ -90,19 +131,15 @@ async def refresh_token(refresh_token: str):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired refresh token")
     # rotate
     store.revoke_refresh_token(refresh_token)
-    new_refresh = create_refresh_token(user_id=info["user_id"])
+    # use stored role if available
+    role = info.get("role") or "customer"
+    new_refresh = create_refresh_token(user_id=info["user_id"], role=role)
     expires_at = (datetime.now(timezone.utc) + timedelta(days=settings.REFRESH_TOKEN_EXPIRATION_DAYS)).isoformat()
-    store.store_refresh_token(new_refresh, user_id=info["user_id"], expires_at=expires_at)
+    store.store_refresh_token(new_refresh, user_id=info["user_id"], expires_at=expires_at, role=role)
 
     # issue new access token
     # find user by id
     # find user and type
     user = store.get_customer(info["user_id"]) or store.get_worker(info["user_id"]) or ({"id": info["user_id"], "phone": ""})
-    # determine role
-    role = "customer"
-    if info["user_id"] in store.workers:
-        role = "worker"
-    elif info["user_id"] in store.admins:
-        role = "admin"
     access = create_access_token(user_id=user["id"], phone_number=user.get("phone", ""), user_type=role)
     return {"access_token": access, "refresh_token": new_refresh}

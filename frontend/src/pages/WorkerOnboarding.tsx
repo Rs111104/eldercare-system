@@ -1,10 +1,10 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useAuthStore } from '@/store/auth'
+import { useStore } from '@/store/useStore'
 
 export default function WorkerOnboarding() {
   const navigate = useNavigate()
-  const { user } = useAuthStore()
+  const user = useStore((state) => state.user)
   const [step, setStep] = useState(1)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)

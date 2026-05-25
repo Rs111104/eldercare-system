@@ -5,6 +5,7 @@ from typing import List, Optional, Dict
 from app.core.database import get_db
 from supabase import Client
 from datetime import datetime
+from app.utils.geo import haversine
 
 
 class WorkerIntegration:
@@ -44,7 +45,7 @@ class WorkerIntegration:
                     worker_lng = worker.get("location_lng")
                     
                     if worker_lat and worker_lng:
-                        distance = self._haversine_distance(
+                        distance = haversine(
                             latitude, longitude,
                             worker_lat, worker_lng
                         )
@@ -139,22 +140,7 @@ class WorkerIntegration:
             print(f"Error getting worker stats: {e}")
             return {}
     
-    @staticmethod
-    def _haversine_distance(lat1: float, lon1: float, 
-                           lat2: float, lon2: float) -> float:
-        """Calculate distance between coordinates"""
-        from math import radians, sin, cos, sqrt, atan2
-        
-        R = 6371
-        lat1_rad = radians(lat1)
-        lat2_rad = radians(lat2)
-        delta_lat = radians(lat2 - lat1)
-        delta_lon = radians(lon2 - lon1)
-        
-        a = sin(delta_lat/2)**2 + cos(lat1_rad) * cos(lat2_rad) * sin(delta_lon/2)**2
-        c = 2 * atan2(sqrt(a), sqrt(1-a))
-        
-        return R * c
+    # uses shared haversine utility
 
 
 class WorkerRating:

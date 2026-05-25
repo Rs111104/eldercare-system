@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useParams } from 'react-router-dom'
-import { useAuthStore } from '@/store/auth'
+import { useStore } from '@/store/useStore'
 
 interface LocationData {
   latitude: number
@@ -23,7 +23,7 @@ interface HistoryEntry {
 
 export default function RealtimeTracking() {
   const { taskId } = useParams()
-  const { user } = useAuthStore()
+  const user = useStore((state) => state.user)
   const [location, setLocation] = useState<LocationData | null>(null)
   const [taskStatus, setTaskStatus] = useState<TaskStatus | null>(null)
   const [history, setHistory] = useState<HistoryEntry[]>([])

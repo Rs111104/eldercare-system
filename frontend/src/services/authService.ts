@@ -1,5 +1,5 @@
 import apiClient from './api'
-import { User } from '@/store/auth'
+import type { AuthUser as User } from '@/types'
 
 export const authService = {
   registerCustomer: async (userData: Partial<User> & { password?: string }) => {

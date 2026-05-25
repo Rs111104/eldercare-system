@@ -25,6 +25,8 @@ async def confirm_arrival(task_id: str, worker_id: str, _user=Depends(require_ro
 
 @router.post("/tasks/{task_id}/sos")
 async def send_sos(task_id: str, customer_id: str, _user=Depends(require_role("customer"))):
+    if getattr(_user, "user_id", None) != customer_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
     try:
         return store.send_sos_alert(task_id, customer_id)
     except KeyError as exc:

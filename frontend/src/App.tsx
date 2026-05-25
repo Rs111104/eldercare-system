@@ -10,13 +10,11 @@ import TaskCreate from '@/pages/TaskCreate'
 import TaskTracking from '@/pages/TaskTracking'
 import WorkerDashboard from '@/pages/WorkerDashboard'
 import WorkerEarnings from '@/pages/WorkerEarnings'
-import AdminDashboard from '@/pages/AdminDashboard'
 
 function RoleRedirect() {
   const user = useStore((state) => state.user)
   if (!user) return <LandingPage />
   if (user.role === 'worker') return <Navigate to="/worker" replace />
-  if (user.role === 'admin') return <Navigate to="/admin" replace />
   return <Navigate to="/customer" replace />
 }
 
@@ -42,7 +40,7 @@ export default function App() {
             <Route path="/track/:taskId" element={<RequireRole role="customer"><TaskTracking /></RequireRole>} />
             <Route path="/worker" element={<RequireRole role="worker"><WorkerDashboard /></RequireRole>} />
             <Route path="/worker/earnings" element={<RequireRole role="worker"><WorkerEarnings /></RequireRole>} />
-            <Route path="/admin" element={<RequireRole role="admin"><AdminDashboard /></RequireRole>} />
+            {/* admin dashboard removed */}
             <Route path="/dashboard" element={<RoleRedirect />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

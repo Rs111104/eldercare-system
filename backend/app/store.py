@@ -4,6 +4,7 @@ import os
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from math import radians, sin, cos, sqrt, atan2
+from app.utils.geo import haversine
 from threading import Lock
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
@@ -11,6 +12,25 @@ from uuid import uuid4
 from app.core.security import hash_password, verify_password, create_access_token
 from app.core.redis_client import get_redis
 import json
+
+
+DEFAULT_PRICING = {
+    "medicine": {"base_price": 120.0, "per_km_rate": 5.0},
+    "help": {"base_price": 150.0, "per_km_rate": 5.0},
+    "visit": {"base_price": 100.0, "per_km_rate": 5.0},
+    "cleaning": {"base_price": 200.0, "per_km_rate": 5.0},
+    "other": {"base_price": 130.0, "per_km_rate": 5.0},
+}
+
+
+def seed_default_pricing(target_store: Any, overwrite: bool = False) -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    for service_type, values in DEFAULT_PRICING.items():
+        if not overwrite and target_store.get_pricing_config(service_type):
+            continue
+        target_store.upsert_pricing_config(service_type, values["base_price"], values["per_km_rate"])
+        if hasattr(target_store, "pricing_config") and service_type in target_store.pricing_config:
+            target_store.pricing_config[service_type]["updated_at"] = now
 
 
 @dataclass
@@ -51,37 +71,13 @@ class InMemoryStore:
             self.auth_tokens.clear()
             self.refresh_tokens.clear()
             self.auth_attempts.clear()
-            self._seed_pricing()
-
-    def _seed_pricing(self) -> None:
-        defaults = {
-            "medicine": {"base_price": 120.0, "per_km_rate": 5.0},
-            "help": {"base_price": 150.0, "per_km_rate": 5.0},
-            "visit": {"base_price": 100.0, "per_km_rate": 5.0},
-            "cleaning": {"base_price": 200.0, "per_km_rate": 5.0},
-            "other": {"base_price": 130.0, "per_km_rate": 5.0},
-        }
-        now = datetime.now(timezone.utc).isoformat()
-        for service_type, values in defaults.items():
-            self.pricing_config[service_type] = {
-                "id": str(uuid4()),
-                "service_type": service_type,
-                "base_price": values["base_price"],
-                "per_km_rate": values["per_km_rate"],
-                "updated_at": now,
-            }
+            seed_default_pricing(self, overwrite=True)
 
     @staticmethod
     def _now() -> str:
         return datetime.now(timezone.utc).isoformat()
 
-    @staticmethod
-    def _haversine(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
-        radius_km = 6371.0
-        d_lat = radians(lat2 - lat1)
-        d_lng = radians(lng2 - lng1)
-        a = sin(d_lat / 2) ** 2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(d_lng / 2) ** 2
-        return radius_km * (2 * atan2(sqrt(a), sqrt(1 - a)))
+    # Use shared haversine utility from app.utils.geo
 
     def create_customer(self, phone: str, name: str, address: str = "", lat: Optional[float] = None, lng: Optional[float] = None, password: str = "") -> Dict[str, Any]:
         with self.lock:
@@ -112,6 +108,12 @@ class InMemoryStore:
             }
             self.admins[admin_id] = admin
             return {k: v for k, v in admin.items() if k != "password_hash"}
+
+    def has_admins(self) -> bool:
+        return bool(self.admins)
+
+    def has_any_admin(self) -> bool:
+        return self.has_admins()
 
     def create_worker(self, phone: str, name: str, service_type: str, rating: float = 4.8, is_verified: bool = False, current_lat: Optional[float] = None, current_lng: Optional[float] = None, password: str = "") -> Dict[str, Any]:
         with self.lock:
@@ -160,11 +162,11 @@ class InMemoryStore:
         self.auth_tokens[token] = {"user_id": user_id, "phone": phone, "role": role, "created_at": self._now()}
         return token
 
-    def store_refresh_token(self, token: str, user_id: str, expires_at: str) -> None:
+    def store_refresh_token(self, token: str, user_id: str, expires_at: str, role: Optional[str] = None) -> None:
         r = get_redis()
         if r:
             key = f"refresh:{token}"
-            payload = {"user_id": user_id, "expires_at": expires_at}
+            payload = {"user_id": user_id, "expires_at": expires_at, "role": role}
             # set with expiry
             try:
                 # calculate ttl
@@ -176,7 +178,7 @@ class InMemoryStore:
             except Exception:
                 pass
         with self.lock:
-            self.refresh_tokens[token] = {"user_id": user_id, "expires_at": expires_at}
+            self.refresh_tokens[token] = {"user_id": user_id, "expires_at": expires_at, "role": role}
 
     def revoke_refresh_token(self, token: str) -> None:
         r = get_redis()
@@ -203,7 +205,7 @@ class InMemoryStore:
                 if expires < datetime.now(timezone.utc):
                     r.delete(f"refresh:{token}")
                     return None
-                return info
+                return {"user_id": info.get("user_id"), "expires_at": info.get("expires_at"), "role": info.get("role")}
             except Exception:
                 pass
         info = self.refresh_tokens.get(token)
@@ -216,7 +218,7 @@ class InMemoryStore:
                 with self.lock:
                     del self.refresh_tokens[token]
                 return None
-            return info
+            return {"user_id": info.get("user_id"), "expires_at": info.get("expires_at"), "role": info.get("role")}
         except Exception:
             return None
 
@@ -602,7 +604,7 @@ class InMemoryStore:
                 if not (bbox_min_lat <= float(worker_lat) <= bbox_max_lat and bbox_min_lng <= float(worker_lng) <= bbox_max_lng):
                     continue
 
-                distance = self._haversine(lat, lng, float(worker_lat), float(worker_lng))
+                distance = haversine(lat, lng, float(worker_lat), float(worker_lng))
                 if distance > expanded_radius_km:
                     continue
 
@@ -712,8 +714,8 @@ class InMemoryStore:
                 loyalty_multiplier = 0.90
 
         same_day_multiplier = 0.85 if same_day_bundle else 1.0
-        floor_price = float(config.get("floor_price", max(0.0, base_price * 0.75)))
-        ceiling_price = float(config.get("ceiling_price", base_price * 4.0))
+        floor_price = float(config.get("floor_price") or max(0.0, base_price * 0.75))
+        ceiling_price = float(config.get("ceiling_price") or (base_price * 4.0))
 
         raw_total = (base_price + (distance_km * per_km_rate)) * urgency_multiplier
         total = raw_total * surge_multiplier * time_multiplier * loyalty_multiplier * same_day_multiplier
@@ -761,7 +763,9 @@ class InMemoryStore:
 
 
 store = InMemoryStore()
-store.reset()
+# NOTE: Do not call `store.reset()` at import time — reset() should only be
+# invoked manually in tests or explicit maintenance scripts. Calling reset on
+# startup caused unintended data wipes during application boot.
 if os.environ.get("USE_DB_STORE", "").lower() in {"1", "true", "yes"}:
     try:
         from app.store_db import _store as db_store

@@ -13,8 +13,9 @@ logger = logging.getLogger(__name__)
 class WhatsAppService:
     def verify_webhook_signature(self, signature: str, body: bytes) -> bool:
         # Expect signature header like 'sha256=...'
+        # For security, webhook verification requires WHATSAPP_APP_SECRET to be set
         if not settings.WHATSAPP_APP_SECRET:
-            return True
+            raise RuntimeError("WHATSAPP_APP_SECRET is not configured")
         try:
             import hmac
             import hashlib

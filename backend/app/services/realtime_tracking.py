@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Set, Dict
 from fastapi import WebSocket, WebSocketDisconnect
 from app.core.database import get_db
+from app.utils.geo import haversine
 from supabase import Client
 
 
@@ -158,7 +159,7 @@ class LocationTracker:
             current = history[i]
             next_point = history[i + 1]
             
-            distance = self._haversine_distance(
+            distance = haversine(
                 current["latitude"], current["longitude"],
                 next_point["latitude"], next_point["longitude"]
             )
@@ -166,23 +167,7 @@ class LocationTracker:
         
         return round(total_distance, 2)
     
-    @staticmethod
-    def _haversine_distance(lat1: float, lon1: float, 
-                           lat2: float, lon2: float) -> float:
-        """Calculate distance between two coordinates using Haversine formula"""
-        from math import radians, sin, cos, sqrt, atan2
-        
-        R = 6371  # Earth's radius in kilometers
-        
-        lat1_rad = radians(lat1)
-        lat2_rad = radians(lat2)
-        delta_lat = radians(lat2 - lat1)
-        delta_lon = radians(lon2 - lon1)
-        
-        a = sin(delta_lat/2)**2 + cos(lat1_rad) * cos(lat2_rad) * sin(delta_lon/2)**2
-        c = 2 * atan2(sqrt(a), sqrt(1-a))
-        
-        return R * c
+    # uses shared haversine utility
     
     async def get_current_location(self, task_id: str) -> Dict:
         """Get most recent location for task"""

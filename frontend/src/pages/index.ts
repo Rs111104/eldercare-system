@@ -1,9 +1,7 @@
 export { default as LandingPage } from './LandingPage'
-export { default as Login } from './Login'
-export { default as Register } from './Register'
-export { default as CustomerDashboard } from './CustomerDashboard'
+// auth and dashboard pages cleaned up; legacy pages removed
 export { default as TaskCreate } from './TaskCreate'
 export { default as TaskTracking } from './TaskTracking'
 export { default as WorkerDashboard } from './WorkerDashboard'
 export { default as WorkerEarnings } from './WorkerEarnings'
-export { default as AdminDashboard } from './AdminDashboard'
+// AdminDashboard removed

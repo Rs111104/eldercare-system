@@ -1,11 +1,11 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { useAuthStore } from '../store/auth';
+import { useStore } from '../store/useStore';
 
 export function WorkerProfile() {
   const { workerId } = useParams<{ workerId: string }>();
   const navigate = useNavigate();
-  const user = useAuthStore((state) => state.user);
+  const user = useStore((state) => state.user);
   
   const [profile, setProfile] = useState({
     name: '',
@@ -82,7 +82,7 @@ export function WorkerProfile() {
     }
   };
 
-  const isOwnProfile = user?.user_id === workerId;
+  const isOwnProfile = user?.id === workerId;
 
   return (
     <div className="min-h-screen bg-gray-50 py-12 px-4">
