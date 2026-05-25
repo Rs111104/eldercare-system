@@ -30,14 +30,14 @@ services:
     environment:
       DATABASE_URL: postgresql://${DB_USER:-postgres}:${DB_PASSWORD:-postgres}@postgres:5432/${DB_NAME:-eldercare}
       REDIS_URL: redis://redis:6379/0
-      SUPABASE_URL: ${SUPABASE_URL}
-      SUPABASE_KEY: ${SUPABASE_KEY}
-      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
-      WHATSAPP_ACCESS_TOKEN: ${WHATSAPP_ACCESS_TOKEN}
-      WHATSAPP_PHONE_NUMBER_ID: ${WHATSAPP_PHONE_NUMBER_ID}
-      WHATSAPP_BUSINESS_ACCOUNT_ID: ${WHATSAPP_BUSINESS_ACCOUNT_ID}
-      JWT_SECRET: ${JWT_SECRET}
+      SUPABASE_URL: ${SUPABASE_URL:-}
+      SUPABASE_KEY: ${SUPABASE_KEY:-}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      WHATSAPP_ACCESS_TOKEN: ${WHATSAPP_ACCESS_TOKEN:-}
+      WHATSAPP_PHONE_NUMBER_ID: ${WHATSAPP_PHONE_NUMBER_ID:-}
+      WHATSAPP_BUSINESS_ACCOUNT_ID: ${WHATSAPP_BUSINESS_ACCOUNT_ID:-}
+      JWT_SECRET: ${JWT_SECRET:-local-development-jwt-secret-change-before-prod}
       BACKEND_URL: ${BACKEND_URL:-http://localhost:8000}
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
       DEBUG: ${DEBUG:-false}
@@ -47,7 +47,7 @@ services:
       - postgres
       - redis
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "python", "-c", "import sys,urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).getcode() == 200 else 1)"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -58,7 +58,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    command: celery -A app.core.celery_app.get_celery worker --loglevel=info
+    command: celery -A app.core.celery_app.celery_app worker --loglevel=info
     environment:
       - REDIS_URL=redis://redis:6379/0
       - DATABASE_URL=postgresql://${DB_USER:-postgres}:${DB_PASSWORD:-postgres}@postgres:5432/${DB_NAME:-eldercare}
@@ -72,7 +72,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    command: celery -A app.core.celery_app.get_celery beat --loglevel=info
+    command: celery -A app.core.celery_app.celery_app beat --loglevel=info
     environment:
       - REDIS_URL=redis://redis:6379/0
       - DATABASE_URL=postgresql://${DB_USER:-postgres}:${DB_PASSWORD:-postgres}@postgres:5432/${DB_NAME:-eldercare}
@@ -107,15 +107,15 @@ services:
       dockerfile: Dockerfile
     image: eldercare/automation:local
     environment:
-      ALERT_SLACK_WEBHOOK: ${ALERT_SLACK_WEBHOOK}
-      PAGERDUTY_INTEGRATION_KEY: ${PAGERDUTY_INTEGRATION_KEY}
-      ALERT_WEBHOOK_SECRET: ${ALERT_WEBHOOK_SECRET}
+      ALERT_SLACK_WEBHOOK: ${ALERT_SLACK_WEBHOOK:-}
+      PAGERDUTY_INTEGRATION_KEY: ${PAGERDUTY_INTEGRATION_KEY:-}
+      ALERT_WEBHOOK_SECRET: ${ALERT_WEBHOOK_SECRET:-}
     ports:
       - "5000:5000"
     volumes:
       - ./monitoring/automation/service:/app
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:5000/health || exit 1"]
+      test: ["CMD", "python", "-c", "import sys,urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:5000/health', timeout=5).getcode() == 200 else 1)"]
       interval: 30s
       timeout: 10s
       retries: 3

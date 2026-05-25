@@ -91,9 +91,10 @@ async def http_exception_handler(request: Request, exc: HTTPException):
     # Return structured errors for HTTPExceptions
     code = getattr(exc, "detail", "")
     message = str(code) if isinstance(code, str) else ""
+    error_code = "VALIDATION_ERROR" if exc.status_code == 422 else getattr(exc, "status_code", "HTTP_ERROR")
     payload = {
         "error": True,
-        "code": getattr(exc, "status_code", "HTTP_ERROR"),
+        "code": error_code,
         "message": message or "An error occurred",
         "timestamp": datetime.utcnow().isoformat(),
     }
@@ -105,8 +106,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     payload = {
         "error": True,
         "code": "VALIDATION_ERROR",
-        "message": "Invalid request payload",
-        "details": exc.errors(),
+        "message": "Please check the request and try again.",
         "timestamp": datetime.utcnow().isoformat(),
     }
     return JSONResponse(status_code=422, content=payload)
@@ -147,6 +147,13 @@ async def root():
 @app.get("/health")
 async def health_check():
     return {"status": "healthy"}
+
+
+@app.get("/health/deep")
+async def root_deep_health():
+    from app.routers.health import deep_health
+
+    return await deep_health()
 
 
 if __name__ == "__main__":

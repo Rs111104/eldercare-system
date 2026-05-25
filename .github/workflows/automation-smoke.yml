@@ -25,4 +25,3 @@ jobs:
       - name: Build docker image
         run: |
           docker build -t eldercare/automation:ci monitoring/automation/service
-*** End Patch

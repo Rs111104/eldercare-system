@@ -68,6 +68,61 @@
         }
       ],
       "datasource": "Prometheus"
+    },
+    {
+      "type": "graph",
+      "title": "Business Health - Tasks Created",
+      "targets": [
+        {
+          "expr": "sum(increase(task_created_total[1d])) by (service_type, status)",
+          "format": "time_series"
+        }
+      ],
+      "datasource": "Prometheus"
+    },
+    {
+      "type": "graph",
+      "title": "WhatsApp Funnel",
+      "targets": [
+        {
+          "expr": "sum(rate(whatsapp_message_sent_total[5m])) by (status, message_type)",
+          "format": "time_series"
+        }
+      ],
+      "datasource": "Prometheus"
+    },
+    {
+      "type": "graph",
+      "title": "Payout Pipeline",
+      "targets": [
+        {
+          "expr": "sum(rate(payout_processed_total[5m])) by (status)",
+          "format": "time_series"
+        }
+      ],
+      "datasource": "Prometheus"
+    },
+    {
+      "type": "graph",
+      "title": "OpenAI Call Duration",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(openai_call_duration_seconds_bucket[5m])) by (le))",
+          "format": "time_series"
+        }
+      ],
+      "datasource": "Prometheus"
+    },
+    {
+      "type": "graph",
+      "title": "Celery Task Duration",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(celery_task_duration_seconds_bucket[5m])) by (le, task_name, status))",
+          "format": "time_series"
+        }
+      ],
+      "datasource": "Prometheus"
     }
   ],
   "schemaVersion": 27,

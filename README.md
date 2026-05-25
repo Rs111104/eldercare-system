@@ -1,46 +1,85 @@
 # ElderCare System
 
-Full-stack eldercare service platform with a FastAPI backend, React + Vite frontend, and PostgreSQL/Supabase migrations.
+WhatsApp-first eldercare coordination for families who need a reliable helper, not another app to learn.
 
-## Repo layout
-- `backend/` — API, test suite, and service logic
-- `frontend/` — customer, worker, and admin UI
-- `database/` — SQL migrations, seed data, and helper functions
-- `docker-compose.yml` — local multi-container stack
+The system lets a customer request help through WhatsApp or the web, matches the task to a verified worker, tracks the visit, records the task history, and splits the worker payout with an audit trail. The interesting parts are the care-specific workflow: multilingual conversation state, scored worker matching, guarded task transitions, payout holds for disputes, operational metrics, and tests for hostile input.
 
-## Quick start
-1. Copy the environment template:
+## What To Review First
+
+- `backend/app/services/conversation_engine.py` — WhatsApp state machine with English, Tamil, and Hindi replies.
+- `backend/app/services/matching_engine.py` — explainable worker ranking by distance, rating, availability, and experience.
+- `backend/app/store.py` — in-memory production harness used by the local stack and tests.
+- `frontend/src/pages/TaskCreate.tsx` — customer task request flow.
+- `docs/adr/0001-whatsapp-first-care-flow.md` — why the product starts in WhatsApp.
+
+## Run It
+
 ```bash
 cp .env.example .env
-```
-2. Fill in the required secrets in `.env`.
-3. Start the stack:
-```bash
 docker compose up --build
 ```
 
-## Local URLs
-- Backend API: `http://localhost:8000`
-- Backend docs: `http://localhost:8000/docs`
-- Frontend app: `http://localhost:3000`
+Local URLs:
 
-## Verification
+- Frontend: `http://localhost:3000`
+- API: `http://localhost:8000`
+- API docs: `http://localhost:8000/docs`
+- Health: `http://localhost:8000/health`
+
+For a local demo, keep provider keys blank. WhatsApp and OpenAI calls fall back to safe local behavior instead of blocking the app.
+
+## Verify It
+
 ```bash
-cd backend
-pytest tests -q
+python -m pytest backend/tests
+python -m compileall backend/app backend/tests
 
-cd ../frontend
+cd frontend
+npm run lint
+npm run type-check
 npm run build
+npm audit --audit-level=high
 ```
 
-## Environment notes
-- Keep `.env` out of source control.
-- Use a strong `JWT_SECRET` in every non-local environment.
-- Set `VITE_API_URL=/api/v1` when serving the frontend behind nginx or Docker.
+Security checks:
 
-## Docs
-- [Backend setup](backend/README.md)
-- [Frontend setup](frontend/README.md)
-- [Database setup](database/README.md)
-- [API reference](API_REFERENCE.md)
-- [Deployment guide](DEPLOYMENT.md)
+```bash
+pip-audit -r backend/requirements.txt
+bandit -q -r backend/app --severity-level high
+```
+
+## Architecture
+
+```text
+backend/app
+  routers/        HTTP boundaries and auth checks
+  services/       business rules and integrations
+  core/           config, logging, auth, metrics, cache
+  models/         request and response schemas
+  store.py        local data store used by tests and compose
+
+frontend/src
+  api/            authenticated API client
+  components/     reusable UI
+  pages/          route-level screens
+  store/          session state
+```
+
+## Care Workflow
+
+1. Customer sends a WhatsApp/web request.
+2. The conversation engine collects service type, details, and confirmation.
+3. The matching engine ranks verified workers and logs the decision.
+4. A worker accepts, checks in, completes the task, and earns a split payout.
+5. The customer rates the task. Low ratings hold payout and flag the task.
+6. Admins review anomalies, dead letters, payout holds, and audit records.
+
+## Production Notes
+
+- Set a strong `JWT_SECRET`.
+- Set `WHATSAPP_APP_SECRET` before accepting webhooks.
+- Keep `WHATSAPP_ACCESS_TOKEN`, `OPENAI_API_KEY`, and payment keys in environment variables only.
+- Run behind HTTPS.
+- Treat phone numbers, addresses, and care notes as PII.
+
+More detail lives in `docs/`: architecture decisions, schema notes, threat model, and performance notes.

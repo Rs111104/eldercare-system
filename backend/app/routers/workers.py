@@ -6,7 +6,8 @@ from app.models import TaskStatus, WorkerLocationRequest
 from app.store import store
 from app.core.cache import cache_response, invalidate_worker_cache, invalidate_task_cache
 from app.core.redis_client import get_redis
-from app.core.deps import require_role
+from app.core.deps import get_current_user, require_role
+from app.core.utils import sanitize_text
 from app.utils.geo import haversine
 import time
 import json
@@ -27,6 +28,11 @@ def _serialize_task(task: dict) -> dict:
     return {**task, "task_id": task["id"], "assigned_worker_id": task.get("assigned_worker_id", task.get("worker_id"))}
 
 
+def _require_worker_or_admin(worker_id: str, user) -> None:
+    if getattr(user, "user_type", None) != "admin" and getattr(user, "user_id", None) != worker_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+
 @router.get("/{worker_id}")
 @cache_response(ttl=30)
 async def get_worker(worker_id: str):
@@ -34,6 +40,34 @@ async def get_worker(worker_id: str):
     if not worker:
         raise HTTPException(status_code=404, detail="Worker not found")
     return _serialize_worker(worker)
+
+
+@router.post("/onboard")
+async def onboard_worker(payload: dict, _user=Depends(require_role("worker"))):
+    worker_id = payload.get("worker_id") or getattr(_user, "user_id", None)
+    if getattr(_user, "user_id", None) != worker_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    worker = store.workers.get(worker_id)
+    if not worker:
+        raise HTTPException(status_code=404, detail="Worker not found")
+    if payload.get("full_name"):
+        worker["name"] = sanitize_text(payload["full_name"])
+    service_types = payload.get("service_types") or []
+    if service_types:
+        worker["service_type"] = sanitize_text(service_types[0])
+    worker["onboarding"] = {
+        "bio": sanitize_text(payload.get("bio", "")),
+        "experience_years": float(payload.get("experience_years") or 0),
+        "hourly_rate": float(payload.get("hourly_rate") or 0),
+        "languages": [sanitize_text(lang) for lang in payload.get("languages", [])],
+        "availability": sanitize_text(payload.get("availability", "full_time")),
+        "certifications": [sanitize_text(item) for item in payload.get("certifications", [])],
+    }
+    try:
+        invalidate_worker_cache(worker_id)
+    except Exception:
+        pass
+    return {"status": "submitted", "worker": _serialize_worker(store.get_worker(worker_id))}
 
 
 @router.put("/{worker_id}/location")
@@ -84,7 +118,8 @@ async def update_worker_location(worker_id: str, payload: WorkerLocationRequest,
 
 
 @router.get("/{worker_id}/available-tasks")
-async def get_available_tasks(worker_id: str, service_type: str | None = None):
+async def get_available_tasks(worker_id: str, service_type: str | None = None, _user=Depends(get_current_user)):
+    _require_worker_or_admin(worker_id, _user)
     worker = store.workers.get(worker_id)
     if not worker:
         raise HTTPException(status_code=404, detail="Worker not found")
@@ -100,7 +135,16 @@ async def accept_task(worker_id: str, task_id: str, _user=Depends(require_role("
     if not store.get_worker(worker_id):
         raise HTTPException(status_code=404, detail="Worker not found")
     try:
-        task = store.update_task(task_id, worker_id=worker_id, status=TaskStatus.assigned.value)
+        task = store.tasks.get(task_id)
+        if not task:
+            raise KeyError("Task not found")
+        task["worker_id"] = worker_id
+        task["assigned_worker_id"] = worker_id
+        if task.get("lifecycle_status") == "REQUESTED":
+            store.transition_task(task_id, "MATCHED", worker_id, "worker", "worker_match")
+            task = store.transition_task(task_id, "CONFIRMED", worker_id, "worker", "worker_accept")
+        else:
+            task = store.update_task(task_id, worker_id=worker_id, status=TaskStatus.assigned.value)
         try:
             invalidate_task_cache(task_id)
             invalidate_worker_cache(worker_id)
@@ -131,7 +175,11 @@ async def check_in(worker_id: str, task_id: str, payload: dict | None = None, _u
     lat = float(payload.get("latitude", payload.get("lat", 0.0)))
     lng = float(payload.get("longitude", payload.get("lng", 0.0)))
     event = store.record_tracking(task_id, worker_id, lat, lng, event_type="check_in")
-    store.update_task(task_id, status=TaskStatus.in_progress.value)
+    task = store.tasks.get(task_id)
+    if task and task.get("lifecycle_status") == "CONFIRMED":
+        store.transition_task(task_id, "IN_PROGRESS", worker_id, "worker", "worker_check_in")
+    else:
+        store.update_task(task_id, status=TaskStatus.in_progress.value, lifecycle_status="IN_PROGRESS")
     return event
 
 
@@ -151,7 +199,8 @@ async def check_out(worker_id: str, task_id: str, payload: dict | None = None, _
 
 
 @router.get("/{worker_id}/stats")
-async def get_worker_stats(worker_id: str):
+async def get_worker_stats(worker_id: str, _user=Depends(get_current_user)):
+    _require_worker_or_admin(worker_id, _user)
     if not store.get_worker(worker_id):
         raise HTTPException(status_code=404, detail="Worker not found")
     tasks = store.list_tasks(worker_id=worker_id)

@@ -12,8 +12,6 @@ export default function TaskTracking() {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    let timer: number | undefined
-
     async function load() {
       if (!taskId) return
       try {
@@ -31,7 +29,7 @@ export default function TaskTracking() {
     }
 
     void load()
-    timer = window.setInterval(() => void load(), 10000)
+    const timer = window.setInterval(() => void load(), 10000)
     return () => window.clearInterval(timer)
   }, [taskId])
 

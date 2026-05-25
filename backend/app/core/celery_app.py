@@ -21,6 +21,7 @@ def get_celery():
         _celery = Celery("eldercare", broker=broker, backend=broker)
         # simple config
         _celery.conf.update(task_serializer="json", accept_content=["json"], result_serializer="json")
+        _celery.conf.imports = ("app.services.celery_tasks",)
         # schedule: release pending payouts every 15 minutes
         try:
             _celery.conf.beat_schedule = {
@@ -36,3 +37,6 @@ def get_celery():
         logger.warning("Celery not available: %s", e)
         _celery = None
         return None
+
+
+celery_app = get_celery()

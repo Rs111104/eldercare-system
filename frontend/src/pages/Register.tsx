@@ -17,6 +17,17 @@ function normalizeUser(response: AuthResponse): AuthUser {
   }
 }
 
+function buildRegisterPayload(role: Role, values: { name: string; phone: string; password: string; serviceType: string; address: string }) {
+  return {
+    phone_number: values.phone.trim(),
+    password: values.password,
+    name: values.name.trim() || (role === 'worker' ? 'Worker' : 'Customer'),
+    service_type: role === 'worker' ? values.serviceType : undefined,
+    service_types: role === 'worker' ? [values.serviceType] : [],
+    address: role === 'customer' ? values.address.trim() : '',
+  }
+}
+
 export default function Register() {
   const navigate = useNavigate()
   const login = useStore((state) => state.login)
@@ -40,14 +51,7 @@ export default function Register() {
 
     setLoading(true)
     try {
-      const payload = {
-        phone_number: phone.trim(),
-        password,
-        name: name.trim() || (role === 'worker' ? 'Worker' : 'Customer'),
-        service_type: role === 'worker' ? serviceType : undefined,
-        service_types: role === 'worker' ? [serviceType] : [],
-        address: role === 'customer' ? address.trim() : '',
-      }
+      const payload = buildRegisterPayload(role, { name, phone, password, serviceType, address })
       const endpoint = role === 'worker' ? '/auth/register/worker' : '/auth/register/customer'
       const { data } = await client.post<AuthResponse>(endpoint, payload)
       login(normalizeUser(data), data.access_token)

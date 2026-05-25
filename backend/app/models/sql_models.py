@@ -34,6 +34,8 @@ class Task(Base):
     price = Column(Float)
     urgency = Column(Float)
     created_at = Column(String, default=now_iso)
+    completed_at = Column(String, nullable=True)
+    cancellation_reason = Column(Text, nullable=True)
 
 
 class Tracking(Base):

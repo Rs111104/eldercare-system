@@ -21,11 +21,18 @@ create_tables(Base)
 class DBStore:
     def __init__(self):
         self.Session = get_session()
+        self.auth_attempts: Dict[str, Dict[str, Any]] = {}
 
     def _now(self) -> str:
         from datetime import datetime
 
         return datetime.utcnow().isoformat()
+
+    def _public_user(self, user: User) -> Dict[str, Any]:
+        data = {key: value for key, value in user.__dict__.items() if key not in {"_sa_instance_state", "password_hash", "extra"}}
+        if user.extra:
+            data.update(user.extra)
+        return data
 
     def create_customer(self, phone: str, name: str, address: str = "", lat: Optional[float] = None, lng: Optional[float] = None, password: str = "") -> Dict[str, Any]:
         session = self.Session()
@@ -34,8 +41,9 @@ class DBStore:
         session.add(u)
         session.commit()
         session.refresh(u)
+        result = self._public_user(u)
         session.close()
-        return {k: v for k, v in u.__dict__.items() if k != "_sa_instance_state" and k != "password_hash"}
+        return result
 
     def create_task(self, customer_id: str, service_type: str, description: str, urgency: float, base_price: float, distance_km: float, worker_id: Optional[str] = None, voice_note_url: Optional[str] = None, status: str = "created", title: str = "Service Request") -> Dict[str, Any]:
         session = self.Session()
@@ -117,26 +125,30 @@ class DBStore:
     def get_customer(self, customer_id: str) -> Optional[Dict[str, Any]]:
         session = self.Session()
         u = session.query(User).filter(User.id == customer_id, User.user_type == 'customer').first()
+        result = self._public_user(u) if u else None
         session.close()
-        return {k: v for k, v in u.__dict__.items() if k != "_sa_instance_state" and k != "password_hash"} if u else None
+        return result
 
     def get_worker(self, worker_id: str) -> Optional[Dict[str, Any]]:
         session = self.Session()
         u = session.query(User).filter(User.id == worker_id, User.user_type == 'worker').first()
+        result = self._public_user(u) if u else None
         session.close()
-        return {k: v for k, v in u.__dict__.items() if k != "_sa_instance_state" and k != "password_hash"} if u else None
+        return result
 
     def list_workers(self) -> list:
         session = self.Session()
         rows = session.query(User).filter(User.user_type == 'worker').all()
+        result = [self._public_user(row) for row in rows]
         session.close()
-        return [{k: v for k, v in row.__dict__.items() if k != "_sa_instance_state" and k != "password_hash"} for row in rows]
+        return result
 
     def list_customers(self) -> list:
         session = self.Session()
         rows = session.query(User).filter(User.user_type == 'customer').all()
+        result = [self._public_user(row) for row in rows]
         session.close()
-        return [{k: v for k, v in row.__dict__.items() if k != "_sa_instance_state" and k != "password_hash"} for row in rows]
+        return result
 
     def assign_worker(self, task_id: str, worker_id: str) -> Dict[str, Any]:
         return self.update_task(task_id, worker_id=worker_id, status='assigned')
@@ -200,8 +212,10 @@ class DBStore:
 
     def record_payout_split(self, worker_id: str, task_id: str, amount: float):
         session = self.Session()
-        immediate = round(amount * 0.75, 2)
-        verification = round(amount * 0.25, 2)
+        fee = round(amount * settings.PLATFORM_FEE_PERCENTAGE, 2)
+        net_amount = round(amount - fee, 2)
+        immediate = round(net_amount * settings.IMMEDIATE_PAYOUT_PERCENTAGE, 2)
+        verification = round(net_amount * settings.VERIFICATION_PAYOUT_PERCENTAGE, 2)
         created_at = self._now()
         verification_available_at = (datetime.now(timezone.utc) + timedelta(hours=48)).isoformat()
         payout_rows = []
@@ -326,8 +340,9 @@ class DBStore:
         session.add(u)
         session.commit()
         session.refresh(u)
+        result = self._public_user(u)
         session.close()
-        return {k: v for k, v in u.__dict__.items() if k != "_sa_instance_state" and k != "password_hash"}
+        return result
 
     def has_admins(self) -> bool:
         session = self.Session()
@@ -346,8 +361,9 @@ class DBStore:
         session.add(u)
         session.commit()
         session.refresh(u)
+        result = self._public_user(u)
         session.close()
-        return {k: v for k, v in u.__dict__.items() if k != "_sa_instance_state" and k != "password_hash"}
+        return result
 
     def authenticate(self, phone: str, password: str) -> Optional[Dict[str, Any]]:
         session = self.Session()
@@ -356,7 +372,7 @@ class DBStore:
         if not u:
             return None
         if not u.password_hash or verify_password(password, u.password_hash):
-            record = {k: v for k, v in u.__dict__.items() if k != "_sa_instance_state" and k != "password_hash"}
+            record = self._public_user(u)
             return {"role": u.user_type, "record": record}
         return None
 
@@ -382,8 +398,38 @@ class DBStore:
         return {"user_id": rt.user_id, "expires_at": rt.expires_at, "role": getattr(rt, "role", None)}
 
     def record_login_attempt(self, phone: str, max_attempts: int = 5, window_minutes: int = 10, lock_minutes: int = 30) -> None:
-        # For DB-backed store we'd still prefer Redis for rate limiting; raise to fallback logic
-        raise NotImplementedError("DBStore.record_login_attempt should use Redis; ensure REDIS_URL set")
+        from app.core.redis_client import get_redis
+
+        r = get_redis()
+        if r:
+            key_count = f"login:{phone}:count"
+            key_lock = f"login:{phone}:locked"
+            if r.exists(key_lock):
+                raise Exception("LOCKED")
+            count = r.incr(key_count)
+            if count == 1:
+                r.expire(key_count, window_minutes * 60)
+            if count > max_attempts:
+                r.setex(key_lock, lock_minutes * 60, "1")
+                raise Exception("LOCKED")
+            return
+
+        now = datetime.now(timezone.utc)
+        entry = self.auth_attempts.get(phone)
+        if not entry:
+            self.auth_attempts[phone] = {"count": 1, "first_at": now.isoformat(), "locked_until": None}
+            return
+        locked_until = entry.get("locked_until")
+        if locked_until and datetime.fromisoformat(locked_until) > now:
+            raise Exception("LOCKED")
+        first_at = datetime.fromisoformat(entry["first_at"])
+        if (now - first_at).total_seconds() > window_minutes * 60:
+            entry.update({"count": 1, "first_at": now.isoformat(), "locked_until": None})
+            return
+        entry["count"] += 1
+        if entry["count"] > max_attempts:
+            entry["locked_until"] = (now + timedelta(minutes=lock_minutes)).isoformat()
+            raise Exception("LOCKED")
 
     def reset_login_attempts(self, phone: str) -> None:
         # Reset in Redis directly
@@ -396,6 +442,7 @@ class DBStore:
                 r.delete(f"login:{phone}:locked")
         except Exception:
             pass
+        self.auth_attempts.pop(phone, None)
 
     def store_whatsapp_message(self, phone: str, direction: str, message_type: str, content: str, task_id: Optional[str] = None) -> Dict[str, Any]:
         session = self.Session()
@@ -415,5 +462,3 @@ if settings.DATABASE_URL:
         _store = DBStore()
     except Exception:
         _store = None
-
-*** End Patch

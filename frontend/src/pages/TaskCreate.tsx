@@ -6,6 +6,16 @@ import PriceEstimate from '@/components/PriceEstimate'
 import { useStore } from '@/store/useStore'
 import type { PricingEstimate } from '@/types'
 
+type TaskCreateResult = {
+  id?: string
+  task_id?: string
+  task?: { id?: string; task_id?: string }
+}
+
+function taskIdFromResult(data: TaskCreateResult): string | null {
+  return data.task_id || data.id || data.task?.task_id || data.task?.id || null
+}
+
 export default function TaskCreate() {
   const navigate = useNavigate()
   const user = useStore((state) => state.user)
@@ -52,30 +62,7 @@ export default function TaskCreate() {
 
     setLoading(true)
     try {
-      let taskId: string | null = null
-      if (voiceNote) {
-        const formData = new FormData()
-        formData.append('customer_id', user.id)
-        formData.append('location_lat', locationLat || '0')
-        formData.append('location_lng', locationLng || '0')
-        formData.append('audio_file', voiceNote)
-        const { data } = await client.post('/tasks/create-from-voice', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
-        taskId = data.task_id || data.task?.task_id || data.task?.id
-      } else {
-        const { data } = await client.post('/tasks/create', {
-          customer_id: user.id,
-          title,
-          description,
-          task_type: serviceType,
-          service_type: serviceType,
-          urgency_level: Math.round(1 + ((urgency - 1) / 0.125)),
-          urgency,
-          location_lat: locationLat ? Number(locationLat) : undefined,
-          location_lng: locationLng ? Number(locationLng) : undefined,
-          same_day_bundle: sameDayBundle,
-        })
-        taskId = data.task_id || data.id
-      }
+      const taskId = await submitTask(user.id)
       toast.success('Task created')
       navigate(taskId ? `/track/${taskId}` : '/customer')
     } catch (submitError) {
@@ -83,6 +70,31 @@ export default function TaskCreate() {
     } finally {
       setLoading(false)
     }
+  }
+
+  async function submitTask(customerId: string): Promise<string | null> {
+    if (voiceNote) {
+      const formData = new FormData()
+      formData.append('customer_id', customerId)
+      formData.append('location_lat', locationLat || '0')
+      formData.append('location_lng', locationLng || '0')
+      formData.append('audio_file', voiceNote)
+      const { data } = await client.post<TaskCreateResult>('/tasks/create-from-voice', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
+      return taskIdFromResult(data)
+    }
+    const { data } = await client.post<TaskCreateResult>('/tasks/create', {
+      customer_id: customerId,
+      title,
+      description,
+      task_type: serviceType,
+      service_type: serviceType,
+      urgency_level: Math.round(1 + ((urgency - 1) / 0.125)),
+      urgency,
+      location_lat: locationLat ? Number(locationLat) : undefined,
+      location_lng: locationLng ? Number(locationLng) : undefined,
+      same_day_bundle: sameDayBundle,
+    })
+    return taskIdFromResult(data)
   }
 
   return (

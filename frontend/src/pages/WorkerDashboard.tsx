@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
 import client from '@/api/client'
 import TaskCard from '@/components/TaskCard'
@@ -13,7 +13,7 @@ export default function WorkerDashboard() {
   const [longitude, setLongitude] = useState('')
   const [loading, setLoading] = useState(true)
 
-  async function loadData() {
+  const loadData = useCallback(async () => {
     if (!user?.id) return
     setLoading(true)
     try {
@@ -28,11 +28,11 @@ export default function WorkerDashboard() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [user?.id])
 
   useEffect(() => {
     void loadData()
-  }, [user?.id])
+  }, [loadData])
 
   async function saveLocation() {
     if (!user?.id) return

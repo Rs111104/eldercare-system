@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from app.core.security import hash_password, verify_password, create_access_token
 from app.core.redis_client import get_redis
+from app.config import settings
 import json
 
 
@@ -45,8 +46,11 @@ class InMemoryStore:
     pricing_config: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     whatsapp_messages: List[Dict[str, Any]] = field(default_factory=list)
     pending_payout_retries: List[Dict[str, Any]] = field(default_factory=list)
+    dead_letters: List[Dict[str, Any]] = field(default_factory=list)
     matching_decisions: List[Dict[str, Any]] = field(default_factory=list)
     flagged_items: List[Dict[str, Any]] = field(default_factory=list)
+    audit_log: List[Dict[str, Any]] = field(default_factory=list)
+    runtime_settings: Dict[str, Any] = field(default_factory=dict)
     trusted_contacts: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)
     auth_tokens: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     refresh_tokens: Dict[str, Dict[str, Any]] = field(default_factory=dict)
@@ -65,8 +69,11 @@ class InMemoryStore:
             self.pricing_config.clear()
             self.whatsapp_messages.clear()
             self.pending_payout_retries.clear()
+            self.dead_letters.clear()
             self.matching_decisions.clear()
             self.flagged_items.clear()
+            self.audit_log.clear()
+            self.runtime_settings.clear()
             self.trusted_contacts.clear()
             self.auth_tokens.clear()
             self.refresh_tokens.clear()
@@ -303,6 +310,10 @@ class InMemoryStore:
                 "service_type": service_type,
                 "task_type": service_type,
                 "status": status,
+                "lifecycle_status": "REQUESTED",
+                "state_transitions": [
+                    {"from": None, "to": "REQUESTED", "actor_id": customer_id, "reason": "task_created", "timestamp": self._now()}
+                ],
                 "description": description,
                 "price": price,
                 "urgency": urgency_multiplier,
@@ -329,6 +340,63 @@ class InMemoryStore:
             task.update(updates)
             return self._public_task(task)
 
+    def transition_task(self, task_id: str, next_state: str, actor_id: str, role: str, reason: str = "") -> Dict[str, Any]:
+        allowed = {
+            "REQUESTED": {"MATCHED", "CANCELLED"},
+            "MATCHED": {"CONFIRMED", "CANCELLED"},
+            "CONFIRMED": {"IN_PROGRESS", "CANCELLED"},
+            "IN_PROGRESS": {"COMPLETED", "CANCELLED"},
+            "COMPLETED": {"RATED", "DISPUTED"},
+            "RATED": {"PAID", "DISPUTED"},
+            "DISPUTED": {"PAID", "CANCELLED"},
+            "PAID": set(),
+            "CANCELLED": set(),
+        }
+        legacy_status = {
+            "REQUESTED": "created",
+            "MATCHED": "assigned",
+            "CONFIRMED": "accepted",
+            "IN_PROGRESS": "in_progress",
+            "COMPLETED": "completed",
+            "RATED": "completed",
+            "PAID": "completed",
+            "DISPUTED": "completed",
+            "CANCELLED": "cancelled",
+        }
+        with self.lock:
+            task = self.tasks.get(task_id)
+            if not task:
+                raise KeyError("Task not found")
+            current = task.get("lifecycle_status") or "REQUESTED"
+            if next_state not in allowed.get(current, set()):
+                raise ValueError(f"Illegal task transition: {current} -> {next_state}")
+            before = dict(task)
+            task["lifecycle_status"] = next_state
+            task["status"] = legacy_status[next_state]
+            if next_state == "COMPLETED":
+                task["completed_at"] = task.get("completed_at") or self._now()
+            task.setdefault("state_transitions", []).append({
+                "from": current,
+                "to": next_state,
+                "actor_id": actor_id,
+                "role": role,
+                "reason": reason,
+                "timestamp": self._now(),
+            })
+            self.audit_log.append({
+                "id": str(uuid4()),
+                "actor_id": actor_id,
+                "role": role,
+                "action": "task.transition",
+                "target_type": "task",
+                "target_id": task_id,
+                "before": {"lifecycle_status": before.get("lifecycle_status"), "status": before.get("status")},
+                "after": {"lifecycle_status": next_state, "status": task["status"]},
+                "reason": reason,
+                "timestamp": self._now(),
+            })
+            return self._public_task(task)
+
     def list_tasks(self, customer_id: Optional[str] = None, worker_id: Optional[str] = None, status: Optional[str] = None) -> List[Dict[str, Any]]:
         tasks = list(self.tasks.values())
         if customer_id is not None:
@@ -347,16 +415,23 @@ class InMemoryStore:
         task["arrival_confirmed"] = False
         task["worker_id"] = worker_id
         task["assigned_worker_id"] = worker_id
-        task["status"] = "assigned"
+        if task.get("lifecycle_status") == "REQUESTED":
+            self.transition_task(task_id, "MATCHED", worker_id, "worker", "worker_assigned")
+        else:
+            task["status"] = "assigned"
         return self._public_task(task)
 
     def complete_task(self, task_id: str) -> Dict[str, Any]:
         task = self.tasks.get(task_id)
         if not task:
             raise KeyError("Task not found")
-        task["status"] = "completed"
-        task["completed_at"] = self._now()
         worker_id = task.get("worker_id") or task.get("assigned_worker_id")
+        if task.get("lifecycle_status") == "IN_PROGRESS":
+            task = self.transition_task(task_id, "COMPLETED", worker_id or "", "worker", "worker_completed")
+        else:
+            task["status"] = "completed"
+            task["lifecycle_status"] = "COMPLETED"
+            task["completed_at"] = self._now()
         if worker_id and worker_id in self.workers:
             self.workers[worker_id]["completed_tasks"] = int(self.workers[worker_id].get("completed_tasks", 0)) + 1
         return self._public_task(task)
@@ -366,6 +441,7 @@ class InMemoryStore:
         if not task:
             raise KeyError("Task not found")
         task["status"] = "cancelled"
+        task["lifecycle_status"] = "CANCELLED"
         task["cancellation_reason"] = reason
         return self._public_task(task)
 
@@ -408,7 +484,11 @@ class InMemoryStore:
             raise KeyError("Task not found")
         task["arrival_confirmed"] = True
         task["arrival_confirmed_at"] = self._now()
-        task["status"] = "in_progress"
+        if task.get("lifecycle_status") == "CONFIRMED":
+            self.transition_task(task_id, "IN_PROGRESS", worker_id, "worker", "arrival_confirmed")
+        else:
+            task["status"] = "in_progress"
+            task["lifecycle_status"] = "IN_PROGRESS"
         return self._public_task(task)
 
     def send_sos_alert(self, task_id: str, customer_id: str) -> Dict[str, Any]:
@@ -456,8 +536,10 @@ class InMemoryStore:
 
     def record_payout_split(self, worker_id: str, task_id: str, amount: float) -> List[Dict[str, Any]]:
         with self.lock:
-            immediate = round(amount * 0.75, 2)
-            verification = round(amount * 0.25, 2)
+            fee = round(amount * settings.PLATFORM_FEE_PERCENTAGE, 2)
+            net_amount = round(amount - fee, 2)
+            immediate = round(net_amount * settings.IMMEDIATE_PAYOUT_PERCENTAGE, 2)
+            verification = round(net_amount * settings.VERIFICATION_PAYOUT_PERCENTAGE, 2)
             created_at = self._now()
             verification_available_at = (datetime.now(timezone.utc) + timedelta(hours=48)).isoformat()
             is_flagged = amount >= 10000
@@ -470,6 +552,9 @@ class InMemoryStore:
                     "worker_id": worker_id,
                     "task_id": task_id,
                     "amount": split_amount,
+                    "gross_amount": round(amount, 2),
+                    "platform_fee": fee,
+                    "net_amount": net_amount,
                     "split_type": split_type,
                     "status": status,
                     "created_at": created_at,
@@ -482,7 +567,44 @@ class InMemoryStore:
                 payout_rows.append(payout)
             if is_flagged:
                 self._flag_item("payout", task_id, flag_reason)
+            self.audit_log.append({
+                "id": str(uuid4()),
+                "actor_id": "system",
+                "role": "system",
+                "action": "payout.split_created",
+                "target_type": "task",
+                "target_id": task_id,
+                "before": {},
+                "after": {"gross_amount": round(amount, 2), "platform_fee": fee, "net_amount": net_amount, "worker_id": worker_id},
+                "reason": "task_payout",
+                "timestamp": self._now(),
+            })
             return payout_rows
+
+    def add_dead_letter(self, task_name: str, payload: Dict[str, Any], error: str) -> Dict[str, Any]:
+        entry = {"id": str(uuid4()), "task_name": task_name, "payload": payload, "error": error, "created_at": self._now(), "status": "open"}
+        self.dead_letters.append(entry)
+        return entry
+
+    def add_review(self, task_id: str, customer_id: str, worker_id: str, rating: int, comment: str = "") -> Dict[str, Any]:
+        review = {
+            "id": str(uuid4()),
+            "task_id": task_id,
+            "customer_id": customer_id,
+            "worker_id": worker_id,
+            "rating": max(1, min(5, int(rating))),
+            "comment": comment,
+            "created_at": self._now(),
+            "is_disputed": int(rating) <= 2,
+        }
+        self.reviews[review["id"]] = review
+        task = self.tasks.get(task_id)
+        if task and task.get("lifecycle_status") == "COMPLETED":
+            next_state = "DISPUTED" if review["is_disputed"] else "RATED"
+            self.transition_task(task_id, next_state, customer_id, "customer", "customer_review")
+            if review["is_disputed"]:
+                self._flag_item("task", task_id, "Low rating disputed payout hold")
+        return review
 
     def get_payouts_for_worker(self, worker_id: str) -> List[Dict[str, Any]]:
         return [payout for payout in self.payouts.values() if payout["worker_id"] == worker_id]
@@ -526,7 +648,6 @@ class InMemoryStore:
                         payout["verification_available_at"] = available_at
                     if datetime.fromisoformat(available_at) > now:
                         continue
-                    # Placeholder for external payout release API call.
                     payout["status"] = "released"
                     payout["released_at"] = self._now()
                 except Exception:
@@ -579,63 +700,16 @@ class InMemoryStore:
         return message
 
     def find_nearest_workers(self, lat: float, lng: float, service_type: str, limit: int = 5) -> List[Dict[str, Any]]:
-        max_radius_km = 5.0
-        expanded_radius_km = max_radius_km
-        candidates: List[Dict[str, Any]] = []
+        from app.services.matching_engine import MatchingEngine
 
-        while expanded_radius_km <= 40.0 and not candidates:
-            lat_delta = expanded_radius_km / 111.0
-            lng_delta = expanded_radius_km / max(1.0, 111.0 * max(abs(cos(radians(lat))), 0.01))
-            bbox_min_lat = lat - lat_delta
-            bbox_max_lat = lat + lat_delta
-            bbox_min_lng = lng - lng_delta
-            bbox_max_lng = lng + lng_delta
-
-            for worker in self.workers.values():
-                if not worker.get("is_verified"):
-                    continue
-                if worker.get("service_type") != service_type:
-                    continue
-
-                worker_lat = worker.get("current_lat")
-                worker_lng = worker.get("current_lng")
-                if worker_lat is None or worker_lng is None:
-                    continue
-                if not (bbox_min_lat <= float(worker_lat) <= bbox_max_lat and bbox_min_lng <= float(worker_lng) <= bbox_max_lng):
-                    continue
-
-                distance = haversine(lat, lng, float(worker_lat), float(worker_lng))
-                if distance > expanded_radius_km:
-                    continue
-
-                rating = float(worker.get("rating", 4.8))
-                proximity_score = max(0.0, 1.0 - min(distance / expanded_radius_km, 1.0))
-                acceptance_score = max(0.0, min(float(worker.get("acceptance_rate", 0.85)), 1.0))
-                experience_score = max(0.0, min(float(worker.get("completed_tasks", 0)) / 50.0, 1.0))
-                rating_score = max(0.0, min(rating / 5.0, 1.0))
-                match_score = round((0.4 * rating_score) + (0.3 * proximity_score) + (0.2 * acceptance_score) + (0.1 * experience_score), 4)
-
-                candidates.append({
-                    **self._public_worker(worker),
-                    "distance_km": round(distance, 2),
-                    "match_score": match_score,
-                    "match_factors": {
-                        "rating": round(rating_score, 4),
-                        "proximity": round(proximity_score, 4),
-                        "acceptance_rate": round(acceptance_score, 4),
-                        "experience": round(experience_score, 4),
-                    },
-                })
-
-            if not candidates:
-                expanded_radius_km *= 2.0
-
-        if not candidates:
+        task = {"lat": lat, "lng": lng, "service_type": service_type}
+        matches = MatchingEngine().rank_workers(task=task, workers=list(self.workers.values()), limit=limit)
+        if not matches:
             self.matching_decisions.append({
                 "service_type": service_type,
                 "lat": lat,
                 "lng": lng,
-                "radius_km": expanded_radius_km,
+                "radius_km": 40.0,
                 "candidate_count": 0,
                 "created_at": self._now(),
             })
@@ -648,14 +722,21 @@ class InMemoryStore:
                 )
             return []
 
-        candidates.sort(key=lambda item: (-item["match_score"], item["distance_km"], -item["rating"]))
-        selected = candidates[:limit]
+        selected = [
+            {
+                **self._public_worker(match.worker),
+                "distance_km": match.distance_km,
+                "match_score": match.score,
+                "match_factors": match.factors,
+            }
+            for match in matches
+        ]
         self.matching_decisions.append({
             "service_type": service_type,
             "lat": lat,
             "lng": lng,
-            "radius_km": expanded_radius_km,
-            "candidate_count": len(candidates),
+            "radius_km": 40.0,
+            "candidate_count": len(matches),
             "selected_worker_ids": [worker["id"] for worker in selected],
             "created_at": self._now(),
         })

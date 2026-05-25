@@ -28,8 +28,10 @@ export interface Task {
   assigned_worker_id?: string | null
   service_type: string
   task_type?: string
+  mode?: string
   status: string
   description: string
+  location?: string
   price: number
   urgency: number
   urgency_level?: number

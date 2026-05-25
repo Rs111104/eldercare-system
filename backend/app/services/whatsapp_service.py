@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from app.config import settings
 from app.store import store
+from app.core import metrics
 from app.core.retry import retry_async
 import aiohttp
 import json
@@ -36,7 +37,8 @@ class WhatsAppService:
 
         if not settings.WHATSAPP_ACCESS_TOKEN or not settings.WHATSAPP_PHONE_NUMBER_ID:
             # No real provider configured; message queued locally
-            logger.info("WhatsApp not configured, queued message %s", msg["id"])
+            logger.info("whatsapp_message_queued", extra={"action": "whatsapp.send", "status": "queued"})
+            self._record_metric("queued", "text")
             return True
 
         @retry_async(retries=3)
@@ -61,10 +63,27 @@ class WhatsAppService:
             await _post_message(payload)
             # mark stored message as processed
             msg["processed"] = True
+            self._record_metric("sent", "text")
             return True
         except Exception as e:
-            logger.exception("Failed to deliver WhatsApp message, queued for retry: %s", str(e))
+            logger.exception("whatsapp_delivery_failed", extra={"action": "whatsapp.send", "status": "failed"})
+            self._record_metric("failed", "text")
+            try:
+                store.add_dead_letter("whatsapp.send_text_message", {"message_id": msg["id"], "message_type": "text"}, e.__class__.__name__)
+            except Exception:
+                logger.exception("dead_letter_record_failed")
             return False
+
+    async def send_message(self, phone: str, content: str, message_type: str = "text") -> dict:
+        delivered = await self.send_text_message(phone, content)
+        return {"status": "sent" if delivered else "failed", "message_type": message_type}
+
+    def _record_metric(self, status: str, message_type: str) -> None:
+        try:
+            if metrics.WHATSAPP_MESSAGES_SENT is not None:
+                metrics.WHATSAPP_MESSAGES_SENT.labels(status=status, message_type=message_type).inc()
+        except Exception:
+            pass
 
     async def send_location_in_progress_message(self, phone_number: str, worker_name: str, worker_phone: str) -> bool:
         return await self.send_text_message(phone_number, f"Your helper {worker_name} is on the way. Phone: {worker_phone}")
@@ -96,5 +115,5 @@ class WhatsAppService:
         try:
             return await _download(media_id)
         except Exception as e:
-            logger.exception("Error downloading media %s: %s", media_id, str(e))
+            logger.exception("whatsapp_media_download_failed")
             return None

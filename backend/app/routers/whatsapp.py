@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Request, Depends
+from fastapi import APIRouter, Depends, HTTPException, Request
 import json
-from app.services.whatsapp_service import WhatsAppService
+from pydantic import ValidationError
 
 from app.config import settings
 from app.models import WhatsAppWebhookRequest
 from app.store import store
 from app.core.utils import sanitize_text
+from app.services.conversation_engine import ConversationEngine
 from app.services.whatsapp_service import WhatsAppService
 from app.core.deps import require_role
 from app.services.voice_service import VoiceProcessingService
@@ -16,6 +17,18 @@ import logging
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _is_duplicate_inbound(phone: str, message_type: str, content: str, task_id: str | None) -> bool:
+    return any(
+        item.get("direction") == "in"
+        and item.get("phone") == phone
+        and item.get("message_type") == message_type
+        and item.get("content") == content
+        and item.get("task_id") == task_id
+        and item.get("processed")
+        for item in store.whatsapp_messages[-50:]
+    )
 
 
 @router.get("/webhook")
@@ -45,23 +58,40 @@ async def handle_whatsapp_webhook(request: Request):
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON")
 
-    payload = WhatsAppWebhookRequest.model_validate(data)
+    try:
+        payload = WhatsAppWebhookRequest.model_validate(data)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail="Please check the request and try again.") from exc
 
     # sanitize content
     clean_content = sanitize_text(payload.content)
+    if _is_duplicate_inbound(payload.phone, payload.message_type, clean_content or "", payload.task_id):
+        return {"status": "received", "duplicate": True}
     msg = store.store_whatsapp_message(phone=payload.phone, direction="in", message_type=payload.message_type, content=clean_content, task_id=payload.task_id)
 
     try:
+        message_text = clean_content
+        transcription = None
         if payload.message_type == "audio":
-            task = store.create_task(customer_id=payload.phone, service_type="help", description=clean_content, urgency=1.25, base_price=150.0, distance_km=0.0, voice_note_url=clean_content)
-            msg["processed"] = True
-            return {"status": "received", "task_created": task}
+            media = await ws.download_media(clean_content, media_type="audio")
+            transcription = await VoiceProcessingService().transcribe_audio(media or b"")
+            message_text = sanitize_text(transcription or "Voice note received")
 
-        if payload.message_type == "text":
-            v = VoiceProcessingService()
-            classification = await v.classify_voice_request(clean_content)
+        if payload.message_type in {"text", "audio"}:
+            engine = ConversationEngine()
+            conversation = await engine.handle_message(payload.phone, message_text, payload.message_type)
+            await ws.send_text_message(payload.phone, conversation.reply)
+            classification = await VoiceProcessingService().classify_voice_request(message_text)
             msg["processed"] = True
-            return {"status": "received", "classification": classification}
+            msg["transcription"] = transcription
+            return {
+                "status": "received",
+                "classification": classification,
+                "conversation": {
+                    "state": conversation.state.value,
+                    "language": conversation.language,
+                },
+            }
 
         msg["processed"] = True
         return {"status": "received"}

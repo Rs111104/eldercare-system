@@ -3,8 +3,11 @@ Voice processing service - convert audio to text and classify tasks
 """
 import json
 import logging
+import asyncio
+import time
 from typing import Dict, Any, Optional
 from app.core.config import settings
+from app.core import metrics
 from app.core.retry import retry_async
 
 logger = logging.getLogger(__name__)
@@ -30,12 +33,14 @@ class VoiceProcessingService:
                 # openai SDK does blocking IO; call in thread if needed
                 return openai.Audio.transcribe(model="whisper-1", file=file_obj, language=language)
 
-            transcript = await _transcribe(audio_file)
+            started = time.perf_counter()
+            transcript = await asyncio.wait_for(_transcribe(audio_file), timeout=settings.OPENAI_TIMEOUT_SECONDS)
+            self._observe_openai(started, "transcribe", {"input_bytes": len(audio_bytes), "output_chars": len(transcript.get("text", ""))})
             return transcript.get("text", "")
 
         except Exception as e:
-            logger.exception("Transcription error")
-            return None
+            logger.exception("openai_transcription_failed", extra={"action": "openai.transcribe", "status": "failed"})
+            return "Voice note received. Please review the original audio if details are unclear."
 
     async def classify_voice_request(self, text: str) -> Dict[str, Any]:
         """Classify voice request using GPT to extract task details"""
@@ -63,17 +68,23 @@ class VoiceProcessingService:
             async def _chat_create(payload):
                 return openai.ChatCompletion.create(**payload)
 
-            response = await _chat_create({
+            started = time.perf_counter()
+            response = await asyncio.wait_for(_chat_create({
                 "model": "gpt-4",
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.3,
                 "max_tokens": 200,
-            })
+            }), timeout=settings.OPENAI_TIMEOUT_SECONDS)
             
             response_text = response.choices[0].message.content
             
             # Parse JSON response
             result = json.loads(response_text)
+            usage = getattr(response, "usage", None)
+            self._observe_openai(started, "classify", {
+                "prompt_tokens": getattr(usage, "prompt_tokens", 0) if usage else 0,
+                "completion_tokens": getattr(usage, "completion_tokens", 0) if usage else 0,
+            })
             
             # Validate fields
             valid_types = ["medicine", "help", "visit", "cleaning", "other"]
@@ -86,7 +97,7 @@ class VoiceProcessingService:
             return result
         
         except json.JSONDecodeError:
-            logger.exception("Failed to parse AI response as JSON")
+            logger.exception("openai_classification_parse_failed", extra={"action": "openai.classify", "status": "fallback"})
             return {
                 "task_type": "other",
                 "title": "Service Request",
@@ -95,7 +106,7 @@ class VoiceProcessingService:
                 "estimated_effort": 2
             }
         except Exception as e:
-            logger.exception("Classification error")
+            logger.exception("openai_classification_failed", extra={"action": "openai.classify", "status": "fallback"})
             return {
                 "task_type": "other",
                 "title": "Service Request",
@@ -103,6 +114,15 @@ class VoiceProcessingService:
                 "urgency_level": 2,
                 "estimated_effort": 2
             }
+
+    def _observe_openai(self, started: float, action: str, usage: Dict[str, Any]) -> None:
+        elapsed = time.perf_counter() - started
+        logger.info("openai_call", extra={"action": f"openai.{action}", "status": "success", "duration_ms": int(elapsed * 1000), "token_usage": usage})
+        try:
+            if metrics.OPENAI_CALL_DURATION is not None:
+                metrics.OPENAI_CALL_DURATION.observe(elapsed)
+        except Exception:
+            pass
 
     async def extract_location_from_text(self, text: str) -> Optional[Dict[str, float]]:
         """Extract location information from text"""

@@ -1,4 +1,4 @@
-import axios from 'axios'
+import axios, { type AxiosError, type AxiosResponse } from 'axios'
 import { useStore } from '@/store/useStore'
 
 const client = axios.create({
@@ -17,15 +17,14 @@ client.interceptors.request.use((config) => {
 })
 
 client.interceptors.response.use(
-  (response) => response,
-  (error) => {
-    const status = error?.response?.status
+  (response: AxiosResponse) => response,
+  (error: AxiosError<{ detail?: unknown; message?: unknown }>) => {
+    const status = error.response?.status
     if (status === 401) {
       useStore.getState().logout()
     }
-    const message = error?.response?.data?.detail || error?.response?.data?.message || 'Something went wrong. Please try again.'
+    const message = error.response?.data?.detail || error.response?.data?.message || 'Something went wrong. Please try again.'
     const err = new Error(typeof message === 'string' ? message : JSON.stringify(message))
-    ;(err as any).response = error?.response
     return Promise.reject(err)
   },
 )

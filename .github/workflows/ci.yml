@@ -34,6 +34,32 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r backend/requirements.txt
+          pip install ruff==0.6.9 mypy==1.11.2 radon==6.0.1 vulture==2.11 pip-audit==2.7.3 bandit==1.7.10 pytest-cov==5.0.0
+      - name: Lint and type-check backend
+        run: |
+          python -m compileall backend/app backend/tests
+          ruff check \
+            backend/app/services/conversation_engine.py \
+            backend/app/services/matching_engine.py \
+            backend/app/services/admin_intelligence.py \
+            backend/app/services/task_intelligence.py \
+            backend/app/services/worker_conversation.py \
+            backend/tests/test_conversation_engine.py \
+            backend/tests/test_matching_engine.py \
+            backend/tests/test_admin_intelligence.py \
+            backend/tests/test_task_intelligence.py \
+            backend/tests/test_worker_conversation.py
+          mypy \
+            backend/app/services/conversation_engine.py \
+            backend/app/services/matching_engine.py \
+            backend/app/services/admin_intelligence.py \
+            backend/app/services/task_intelligence.py \
+            backend/app/services/worker_conversation.py \
+            --ignore-missing-imports
+      - name: Security audit backend
+        run: |
+          pip-audit -r backend/requirements.txt
+          bandit -q -r backend/app --severity-level high
       - name: Set DATABASE_URL
         run: echo "DATABASE_URL=postgresql://postgres:postgres@localhost:5432/eldercare" >> backend/.env
       - name: Run migrations
@@ -43,6 +69,8 @@ jobs:
         run: |
           cd backend
           pytest -q
+      - name: Docker compose config
+        run: docker compose config --quiet
 
   frontend:
     runs-on: ubuntu-latest
@@ -57,6 +85,15 @@ jobs:
         run: |
           cd frontend
           npm ci
+      - name: Lint and type-check frontend
+        run: |
+          cd frontend
+          npm run lint
+          npm run type-check
+      - name: Security audit frontend
+        run: |
+          cd frontend
+          npm audit --audit-level=high
       - name: Build frontend
         run: |
           cd frontend

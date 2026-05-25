@@ -2,14 +2,16 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
-from app.core.deps import require_role
+from app.core.deps import get_current_user, require_role
 from app.store import store
 
 router = APIRouter()
 
 
 @router.post("/{worker_id}/submit-document")
-async def submit_verification_document(worker_id: str, document_type: str, document_file: UploadFile = File(...)):
+async def submit_verification_document(worker_id: str, document_type: str, document_file: UploadFile = File(...), _user=Depends(get_current_user)):
+    if getattr(_user, "user_type", None) != "admin" and getattr(_user, "user_id", None) != worker_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
     worker = store.workers.get(worker_id)
     if not worker:
         raise HTTPException(status_code=404, detail="Worker not found")
@@ -19,7 +21,9 @@ async def submit_verification_document(worker_id: str, document_type: str, docum
 
 
 @router.get("/{worker_id}/verification-status")
-async def get_verification_status(worker_id: str):
+async def get_verification_status(worker_id: str, _user=Depends(get_current_user)):
+    if getattr(_user, "user_type", None) != "admin" and getattr(_user, "user_id", None) != worker_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
     worker = store.get_worker(worker_id)
     if not worker:
         raise HTTPException(status_code=404, detail="Worker not found")
@@ -53,7 +57,9 @@ async def get_pending_verifications(limit: int = 10, _admin=Depends(require_role
 
 
 @router.put("/{worker_id}/profile")
-async def update_worker_profile(worker_id: str, name: str | None = None, email: str | None = None, service_types: list | None = None):
+async def update_worker_profile(worker_id: str, name: str | None = None, email: str | None = None, service_types: list | None = None, _user=Depends(get_current_user)):
+    if getattr(_user, "user_type", None) != "admin" and getattr(_user, "user_id", None) != worker_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
     worker = store.workers.get(worker_id)
     if not worker:
         raise HTTPException(status_code=404, detail="Worker not found")

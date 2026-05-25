@@ -124,6 +124,18 @@ async def login(payload: LoginRequest):
     return _issue_response(auth["role"], auth["record"])
 
 
+@router.get("/me")
+async def me(user=Depends(get_current_user)):
+    record = store.get_customer(user.user_id) or store.get_worker(user.user_id)
+    if not record and getattr(user, "user_type", None) == "admin":
+        record = next((dict(admin, password_hash=None) for admin in getattr(store, "admins", {}).values() if admin["id"] == user.user_id), None)
+        if record:
+            record.pop("password_hash", None)
+    if not record:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    return {"user_id": user.user_id, "user_type": user.user_type, "user": record}
+
+
 @router.post("/refresh")
 async def refresh_token(refresh_token: str):
     info = store.validate_refresh_token(refresh_token)

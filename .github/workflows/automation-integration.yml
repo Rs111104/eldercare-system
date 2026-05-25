@@ -26,4 +26,3 @@ jobs:
       - name: Stop container
         run: |
           docker rm -f automation_ci
-*** End Patch

@@ -206,7 +206,7 @@ echo "For detailed documentation, see:"
 echo "- README.md - Project overview"
 echo "- docs/DEPLOYMENT.md - Deployment guide"
 echo "- docs/API.md - API reference"
-echo "- PROJECT_FINALIZATION.md - Complete guide"
+echo "- README.md - Start here"
 echo ""
 
 print_success "System is running and ready for development!"

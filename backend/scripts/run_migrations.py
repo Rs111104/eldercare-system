@@ -5,6 +5,7 @@ import os
 here = os.path.dirname(__file__)
 root = os.path.abspath(os.path.join(here, '..'))
 rc = Config(os.path.join(root, 'alembic.ini'))
+rc.set_main_option('script_location', os.path.join(root, 'alembic'))
 
 # Use DATABASE_URL from environment if present
 import sys

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useStore } from '@/store/useStore'
+import client from '@/api/client'
 
 export default function WorkerOnboarding() {
   const navigate = useNavigate()
@@ -68,28 +69,15 @@ export default function WorkerOnboarding() {
       setLoading(true)
       setError(null)
       
-      // Save worker onboarding data
-      const response = await fetch('http://localhost:8000/api/v1/workers/onboard', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        },
-        body: JSON.stringify({
-          worker_id: (user as any)?.id,
-          ...formData
-        })
+      await client.post('/workers/onboard', {
+        worker_id: user?.id,
+        ...formData
       })
 
-      if (!response.ok) {
-        throw new Error('Failed to complete onboarding')
-      }
-
-      navigate('/dashboard')
+      navigate('/worker')
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'An error occurred'
       setError(errorMessage)
-      console.error(err)
     } finally {
       setLoading(false)
     }

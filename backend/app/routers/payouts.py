@@ -5,29 +5,38 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.store import store
-from app.core.deps import require_role
+from app.core.deps import get_current_user, require_role
+from app.core import metrics
 
 router = APIRouter()
 
 
+def _require_worker_or_admin(worker_id: str, user) -> None:
+    if getattr(user, "user_type", None) != "admin" and getattr(user, "user_id", None) != worker_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+
 @router.get("/worker/{worker_id}")
-async def get_worker_payouts(worker_id: str):
+async def get_worker_payouts(worker_id: str, _user=Depends(get_current_user)):
+    _require_worker_or_admin(worker_id, _user)
     return store.get_payouts_for_worker(worker_id)
 
 
 @router.get("/worker/{worker_id}/earnings")
-async def get_worker_earnings(worker_id: str):
+async def get_worker_earnings(worker_id: str, _user=Depends(get_current_user)):
+    _require_worker_or_admin(worker_id, _user)
     return store.get_earnings_for_worker(worker_id)
 
 
 @router.get("/worker/{worker_id}/history")
-async def get_payout_history(worker_id: str, limit: int = 20, offset: int = 0):
+async def get_payout_history(worker_id: str, limit: int = 20, offset: int = 0, _user=Depends(get_current_user)):
+    _require_worker_or_admin(worker_id, _user)
     payouts = store.get_payouts_for_worker(worker_id)
     return payouts[offset : offset + limit]
 
 
 @router.post("/process/{task_id}")
-async def process_task_payout(task_id: str):
+async def process_task_payout(task_id: str, _admin=Depends(require_role("admin"))):
     task = store.tasks.get(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -36,7 +45,13 @@ async def process_task_payout(task_id: str):
     worker_id = task.get("worker_id")
     if not worker_id:
         raise HTTPException(status_code=400, detail="Task has no assigned worker")
-    return store.record_payout_split(worker_id, task_id, float(task.get("price", 0)))
+    payouts = store.record_payout_split(worker_id, task_id, float(task.get("price", 0)))
+    try:
+        if metrics.PAYOUTS_PROCESSED is not None:
+            metrics.PAYOUTS_PROCESSED.labels(status="created").inc()
+    except Exception:
+        pass
+    return payouts
 
 
 @router.post("/{payout_id}/release-immediate")
@@ -49,7 +64,7 @@ async def release_immediate_payout(payout_id: str, _admin=Depends(require_role("
 
 
 @router.post("/{payout_id}/release-verification")
-async def release_verification_payout(payout_id: str):
+async def release_verification_payout(payout_id: str, _admin=Depends(require_role("admin"))):
     payout = store.payouts.get(payout_id)
     if not payout:
         raise HTTPException(status_code=404, detail="Payout not found")

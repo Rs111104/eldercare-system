@@ -46,6 +46,10 @@ class QueueWorker:
                 message["processed"] = True
         except Exception:
             logger.exception("Failed to process queued message")
+            try:
+                store.add_dead_letter("queue_worker.process_message", {"message_id": message.get("id"), "direction": message.get("direction")}, "processing_failed")
+            except Exception:
+                logger.exception("Failed to record dead letter")
 
     async def _run_redis_loop(self, url: str):
         try:
